@@ -1,3 +1,31 @@
+# Relatório de testes — V1.9.0 (compilação nº 9)
+
+Execução: https://github.com/well498/X-Meter-Connect-UNITECHBRASIL/actions/runs/39464195705
+Resultado: ✅ análise sem erros · ✅ todos os testes automatizados · ✅ APK `UNITECH_XMETER_CONNECT_v1.9.0_teste_9.apk`
+
+## Testes obrigatórios do prompt (atualização V1.7)
+
+| # | Requisito | Teste automatizado |
+|---|---|---|
+| 1 | 200 mA × 100 ms = 20,00 mAs | `calc_test`, `analysis_test`, `widget_test` |
+| 2 | Perfil SAWAE ALTUS com correntes de 80 a 630 mA | `database_test` (v5: perfis), `app_state_test` (setas 80→630, SET 700 mA recusado) |
+| 3 | Tolerância SAWAE para 20 mAs: 17,8 a 22,2 mAs | `calc_test` (intervalo e classificação nos limites), `database_test`, `app_state_test` |
+| 4 | Persistência dos valores SET | `database_test` (fecha e reabre o banco) |
+| 5 | Histórico após reiniciar | `database_test`, `app_state_test` |
+| 6 | Separação entre simulados e reais | `database_test`, `app_state_test`, `report_test` |
+| 7 | Medições fora da faixa | `database_test` (2.500 mAs gravado sem truncar, INVÁLIDA; saturada inválida), `calc_test` |
+| 8 | Funcionamento offline | `app_state_test` (sem instrumento) e todo o banco local |
+| 9 | Sincronização sem duplicação | `database_test`, `app_state_test` (inclusive após queda de conexão e no modo local) |
+| 10 | Geração de relatório técnico | `report_test` (PDF válido com SAWAE, inválidas e simuladas; CSV com origem do critério) |
+
+Também: modo local (SET adotado com origem "instrumento"), bateria e alertas, diagnóstico da forma
+de onda (pico inicial, patamar, estabilidade), tubo/kV como metadados, perfis do usuário.
+
+Compilações nº 7 e 8: erros de tipo inteiro no diagnóstico, conflito do nome `Evaluation` no teste e
+um teste antigo que esperava descartar leitura saturada (agora é registrada como inválida). Corrigidos.
+
+---
+
 # Relatório de testes — V1.8.0 (compilação nº 6)
 
 Execução: https://github.com/well498/X-Meter-Connect-UNITECHBRASIL/actions/runs/39451127092
