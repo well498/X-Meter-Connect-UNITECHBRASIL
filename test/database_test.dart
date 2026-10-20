@@ -311,4 +311,35 @@ void main() {
     expect(await db.readings(), hasLength(2), reason: 'backup inválido não altera nada');
     await db.db.close();
   });
+
+  test('tipo de gerador é salvo e define a tolerância aplicada', () async {
+    final db = await open();
+    final e = (await db.equipment(seedEquipmentId))!;
+    expect(e.generatorType, GeneratorType.highFrequency);
+    await db.saveEquipment(Equipment(
+      id: e.id,
+      manufacturer: e.manufacturer,
+      model: e.model,
+      generatorType: GeneratorType.conventional,
+      createdAt: e.createdAt,
+      updatedAt: DateTime.now(),
+    ));
+    expect((await db.equipment(e.id))!.generatorType, GeneratorType.conventional);
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances(masPct: 10),
+        convTol: const Tolerances(masPct: 5));
+    final r = (await db.readings()).single;
+    expect(r.tolerances!.masPct, 5, reason: 'convencional usa a tolerância própria');
+    await db.db.close();
+  });
+
+  test('configurações guardam tolerâncias separadas por tipo', () async {
+    final db = await open();
+    await db.saveSettings(const AppSettings(
+        tolerances: Tolerances(maPct: 10), tolerancesConv: Tolerances(maPct: 15, alertFraction: 0.7)));
+    final st = await db.loadSettings();
+    expect(st.tolFor(GeneratorType.highFrequency).maPct, 10);
+    expect(st.tolFor(GeneratorType.conventional).maPct, 15);
+    expect(st.tolFor(GeneratorType.conventional).alertFraction, 0.7);
+    await db.db.close();
+  });
 }

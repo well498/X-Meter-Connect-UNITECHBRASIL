@@ -116,6 +116,16 @@ String fmt(double? v, [int decimals = 2]) {
   return v.toStringAsFixed(decimals).replaceAll('.', ',');
 }
 
+/// Formata sem zeros desnecessários: 200 -> "200", 12.5 -> "12,5", 1.25 -> "1,25".
+String fmtTrim(double v) {
+  if (v % 1 == 0) return v.toStringAsFixed(0);
+  var t = v.toStringAsFixed(2);
+  while (t.endsWith('0')) {
+    t = t.substring(0, t.length - 1);
+  }
+  return t.replaceAll('.', ',');
+}
+
 String fmtSigned(double? v, [int decimals = 2]) {
   if (v == null || !v.isFinite) return '—';
   final s = fmt(v, decimals);
@@ -134,4 +144,77 @@ String fmtDate(DateTime? d) {
   if (d == null) return '—';
   final l = d.toLocal();
   return '${two(l.day)}/${two(l.month)}/${l.year}';
+}
+
+// ---------------------------------------------------------------------------
+// Tipos de gerador e valores padronizados de mA e tempo (setas ▲▼ do SET)
+// ---------------------------------------------------------------------------
+
+enum GeneratorType { highFrequency, conventional }
+
+extension GeneratorTypeInfo on GeneratorType {
+  String get code => switch (this) {
+        GeneratorType.highFrequency => 'hf',
+        GeneratorType.conventional => 'conv',
+      };
+
+  String get label => switch (this) {
+        GeneratorType.highFrequency => 'Alta frequência',
+        GeneratorType.conventional => 'Convencional microprocessado',
+      };
+
+  String get shortLabel => switch (this) {
+        GeneratorType.highFrequency => 'AF',
+        GeneratorType.conventional => 'Conv.',
+      };
+
+  static GeneratorType fromCode(String? code) =>
+      code == 'conv' ? GeneratorType.conventional : GeneratorType.highFrequency;
+
+  /// Estações de corrente (mA) típicas, até 800 mA.
+  List<double> get maSteps => switch (this) {
+        // Série R10 (Renard), usada pela maioria dos geradores de alta frequência.
+        GeneratorType.highFrequency => const <double>[
+            10, 12.5, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, //
+            200, 250, 320, 400, 500, 630, 800,
+          ],
+        // Estações comuns em comandos convencionais microprocessados.
+        GeneratorType.conventional => const <double>[
+            25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800,
+          ],
+      };
+
+  /// Estações de tempo (ms) típicas.
+  List<double> get msSteps => switch (this) {
+        // Série R10 de 1 ms a 6,3 s.
+        GeneratorType.highFrequency => const <double>[
+            1, 1.25, 1.6, 2, 2.5, 3.2, 4, 5, 6.3, 8, 10, 12.5, 16, 20, 25, 32, 40, 50, //
+            63, 80, 100, 125, 160, 200, 250, 320, 400, 500, 630, 800, 1000, 1250, 1600,
+            2000, 2500, 3200, 4000, 5000, 6300,
+          ],
+        // Convencional: mínimo de ~10 ms (rede de 60 Hz), até 5 s.
+        GeneratorType.conventional => const <double>[
+            10, 20, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500, //
+            600, 800, 1000, 1200, 1500, 2000, 2500, 3000, 4000, 5000,
+          ],
+      };
+
+  double get maxMa => maSteps.last;
+  double get maxMs => msSteps.last;
+}
+
+/// Próxima estação da tabela acima (up = true) ou abaixo do valor atual.
+/// Funciona mesmo quando o valor digitado não está na tabela.
+double stepValue(List<double> steps, double current, {required bool up}) {
+  const eps = 1e-9;
+  if (up) {
+    for (final s in steps) {
+      if (s > current + eps) return s;
+    }
+    return steps.last;
+  }
+  for (final s in steps.reversed) {
+    if (s < current - eps) return s;
+  }
+  return steps.first;
 }

@@ -164,6 +164,7 @@ class XDatabase {
   /// V3: tolerância por medição, arquivamento, auditoria e proteção.
   static Future<void> _upgradeV2toV3(DatabaseExecutor d) async {
     await d.execute('ALTER TABLE equipment ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+    await d.execute("ALTER TABLE equipment ADD COLUMN generator_type TEXT NOT NULL DEFAULT 'hf'");
     for (final c in ['tol_ma', 'tol_ms', 'tol_mas', 'alert_fraction']) {
       await d.execute('ALTER TABLE readings ADD COLUMN $c REAL');
     }
@@ -478,7 +479,7 @@ class XDatabase {
   /// aparecem sempre como SIMULADOR, nunca como medição real.
   Future<MergeResult> mergeDeviceReadings(
       String deviceId, int nextCursor, List<dynamic> items, Tolerances tol,
-      {bool deviceSimulated = false}) async {
+      {bool deviceSimulated = false, Tolerances? convTol}) async {
     var inserted = 0, duplicates = 0, rejected = 0;
     await db.transaction((txn) async {
       for (final raw in items) {
@@ -514,8 +515,17 @@ class XDatabase {
           rejected++;
           continue;
         }
+        // Tolerância conforme o tipo de gerador do equipamento da sessão.
+        var applied = tol;
+        if (convTol != null) {
+          final eq = await txn.query('equipment',
+              columns: ['generator_type'], where: 'id = ?', whereArgs: [ses.single['equipment_id']]);
+          if (eq.isNotEmpty && eq.single['generator_type'] == GeneratorType.conventional.code) {
+            applied = convTol;
+          }
+        }
         final ev = evaluate(
-            setMa: setMa, setMs: setMs, readMa: readMa, readMs: readMs, readMas: readMas, tol: tol);
+            setMa: setMa, setMs: setMs, readMa: readMa, readMs: readMs, readMas: readMas, tol: applied);
         final existing = await txn.query('readings',
             columns: ['uid'],
             where: 'device_id = ? AND shot_id = ?',
@@ -545,7 +555,7 @@ class XDatabase {
           'recorded_at':
               DateTime.tryParse(r['recorded_at']?.toString() ?? '')?.toUtc().toIso8601String(),
           'received_at': DateTime.now().toUtc().toIso8601String(),
-          ..._tolColumns(tol),
+          ..._tolColumns(applied),
         });
         inserted++;
       }

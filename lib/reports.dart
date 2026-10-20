@@ -15,7 +15,7 @@ String _tolText(Tolerances t) =>
 String buildCsv(Equipment eq, List<Reading> readings, Tolerances tol) {
   final b = StringBuffer();
   b.writeln([
-    'id_medicao', 'origem', 'equipamento', 'serie', 'id_interno', 'sessao', 'instrumento',
+    'id_medicao', 'origem', 'equipamento', 'gerador', 'serie', 'id_interno', 'sessao', 'instrumento',
     'disparo', 'data_hora', 'mA_SET', 'ms_SET', 'mAs_SET', 'mA_READ', 'ms_READ', 'mAs_READ',
     'erro_mA_%', 'erro_ms_%', 'erro_mAs_%', 'status', 'tolerancia_aplicada'
   ].join(';'));
@@ -25,6 +25,7 @@ String buildCsv(Equipment eq, List<Reading> readings, Tolerances tol) {
       r.uid,
       r.sourceLabel,
       eq.title,
+      eq.generatorType.label,
       eq.serialLabel,
       eq.internalId ?? '',
       r.sessionId,
@@ -91,6 +92,7 @@ String buildTextReport(Equipment eq, MeasureSession? session, List<Reading> read
     ..writeln('Cliente: ${eq.client ?? '—'}')
     ..writeln('Estabelecimento: ${eq.site ?? '—'}')
     ..writeln('Fabricante/Modelo: ${eq.title}')
+    ..writeln('Tipo de gerador: ${eq.generatorType.label}')
     ..writeln('Nº de série: ${eq.serialLabel}')
     ..writeln('Identificação interna: ${eq.internalId ?? '—'}')
     ..writeln('Data da aferição: ${fmtDate(eq.calibrationDate)}')

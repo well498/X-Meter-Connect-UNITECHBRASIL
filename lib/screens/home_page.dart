@@ -88,6 +88,7 @@ class HomePage extends StatelessWidget {
               : Text([
                   if (eq.client != null) eq.client!,
                   if (eq.site != null) eq.site!,
+                  eq.generatorType.label,
                   'Série: ${eq.serialLabel}',
                   if (eq.internalId != null) 'ID: ${eq.internalId}',
                 ].join(' • ')),

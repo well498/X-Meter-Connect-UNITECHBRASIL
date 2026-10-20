@@ -29,6 +29,7 @@ class Equipment {
   final String? internalId;
   final DateTime? calibrationDate;
   final String? technician;
+  final GeneratorType generatorType;
   final bool archived;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -43,6 +44,7 @@ class Equipment {
     this.internalId,
     this.calibrationDate,
     this.technician,
+    this.generatorType = GeneratorType.highFrequency,
     this.archived = false,
     required this.createdAt,
     required this.updatedAt,
@@ -61,6 +63,7 @@ class Equipment {
         'internal_id': internalId,
         'calibration_date': calibrationDate?.toIso8601String(),
         'technician': technician,
+        'generator_type': generatorType.code,
         'archived': archived ? 1 : 0,
         'created_at': createdAt.toUtc().toIso8601String(),
         'updated_at': updatedAt.toUtc().toIso8601String(),
@@ -76,6 +79,7 @@ class Equipment {
         internalId: _str(m['internal_id']),
         calibrationDate: DateTime.tryParse(m['calibration_date']?.toString() ?? ''),
         technician: _str(m['technician']),
+        generatorType: GeneratorTypeInfo.fromCode(m['generator_type']?.toString()),
         archived: (m['archived'] as int? ?? 0) == 1,
         createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '') ?? DateTime.now(),
         updatedAt: DateTime.tryParse(m['updated_at']?.toString() ?? '') ?? DateTime.now(),
@@ -289,7 +293,11 @@ class AppSettings {
   final int port;
   final String token;
   final bool autoReconnect;
+  /// Tolerâncias para geradores de alta frequência.
   final Tolerances tolerances;
+
+  /// Tolerâncias para geradores convencionais microprocessados.
+  final Tolerances tolerancesConv;
   final bool demoMode;
   final String? selectedEquipmentId;
 
@@ -299,6 +307,7 @@ class AppSettings {
     this.token = '',
     this.autoReconnect = true,
     this.tolerances = const Tolerances(),
+    this.tolerancesConv = const Tolerances(),
     this.demoMode = false,
     this.selectedEquipmentId,
   });
@@ -309,6 +318,7 @@ class AppSettings {
     String? token,
     bool? autoReconnect,
     Tolerances? tolerances,
+    Tolerances? tolerancesConv,
     bool? demoMode,
     String? selectedEquipmentId,
   }) =>
@@ -318,6 +328,7 @@ class AppSettings {
         token: token ?? this.token,
         autoReconnect: autoReconnect ?? this.autoReconnect,
         tolerances: tolerances ?? this.tolerances,
+        tolerancesConv: tolerancesConv ?? this.tolerancesConv,
         demoMode: demoMode ?? this.demoMode,
         selectedEquipmentId: selectedEquipmentId ?? this.selectedEquipmentId,
       );
@@ -331,9 +342,16 @@ class AppSettings {
         'tol_ms': tolerances.msPct.toString(),
         'tol_mas': tolerances.masPct.toString(),
         'alert_fraction': tolerances.alertFraction.toString(),
+        'conv_tol_ma': tolerancesConv.maPct.toString(),
+        'conv_tol_ms': tolerancesConv.msPct.toString(),
+        'conv_tol_mas': tolerancesConv.masPct.toString(),
+        'conv_alert_fraction': tolerancesConv.alertFraction.toString(),
         'demo_mode': demoMode ? '1' : '0',
         if (selectedEquipmentId != null) 'selected_equipment': selectedEquipmentId!,
       };
+
+  Tolerances tolFor(GeneratorType t) =>
+      t == GeneratorType.conventional ? tolerancesConv : tolerances;
 
   factory AppSettings.fromMap(Map<String, String> m) {
     const d = AppSettings();
@@ -348,6 +366,12 @@ class AppSettings {
         msPct: n('tol_ms', d.tolerances.msPct),
         masPct: n('tol_mas', d.tolerances.masPct),
         alertFraction: n('alert_fraction', d.tolerances.alertFraction),
+      ),
+      tolerancesConv: Tolerances(
+        maPct: n('conv_tol_ma', d.tolerancesConv.maPct),
+        msPct: n('conv_tol_ms', d.tolerancesConv.msPct),
+        masPct: n('conv_tol_mas', d.tolerancesConv.masPct),
+        alertFraction: n('conv_alert_fraction', d.tolerancesConv.alertFraction),
       ),
       demoMode: (m['demo_mode'] ?? '0') == '1',
       selectedEquipmentId: m['selected_equipment'],

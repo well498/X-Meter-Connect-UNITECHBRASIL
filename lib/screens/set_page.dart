@@ -24,8 +24,8 @@ class _SetPageState extends State<SetPage> {
     final key = ses == null ? null : '${ses.id}|${ses.setMa}|${ses.setMs}';
     if (key != _loadedSession) {
       _loadedSession = key;
-      ma.text = ses == null ? '' : fmt(ses.setMa, ses.setMa % 1 == 0 ? 0 : 2);
-      ms.text = ses == null ? '' : fmt(ses.setMs, ses.setMs % 1 == 0 ? 0 : 2);
+      ma.text = ses == null ? '' : fmtTrim(ses.setMa);
+      ms.text = ses == null ? '' : fmtTrim(ses.setMs);
     }
   }
 
@@ -54,19 +54,55 @@ class _SetPageState extends State<SetPage> {
     if (mounted) setState(() => error = err);
   }
 
-  Widget _input(String label, String unit, TextEditingController c) => TextField(
-        controller: c,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        textAlign: TextAlign.right,
-        onChanged: (_) => setState(() {}),
-        style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: XColors.blueDark),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(fontSize: 18),
-          suffixText: unit,
-          suffixStyle: const TextStyle(fontSize: 20, color: XColors.gray),
+  /// Seta ▲ sobe e ▼ desce para a próxima estação padrão do tipo de gerador.
+  void _step(TextEditingController c, List<double> steps, bool up) {
+    final cur = parseNum(c.text) ?? (up ? 0.0 : steps.last + 1);
+    setState(() => c.text = fmtTrim(stepValue(steps, cur, up: up)));
+  }
+
+  Widget _arrow(IconData icon, String tooltip, VoidCallback onTap) => Tooltip(
+        message: tooltip,
+        child: SizedBox(
+          width: 64,
+          height: 64,
+          child: FilledButton.tonal(
+            onPressed: onTap,
+            style: FilledButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: const Size(64, 64),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            child: Icon(icon, size: 44, semanticLabel: tooltip),
+          ),
         ),
       );
+
+  Widget _input(String label, String unit, String what, TextEditingController c, List<double> steps) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: XColors.gray)),
+        const SizedBox(height: 6),
+        Row(children: [
+          _arrow(Icons.keyboard_arrow_down, 'Diminuir $what', () => _step(c, steps, false)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: c,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textAlign: TextAlign.center,
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: XColors.blueDark),
+              decoration: InputDecoration(
+                suffixText: unit,
+                suffixStyle: const TextStyle(fontSize: 20, color: XColors.gray),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _arrow(Icons.keyboard_arrow_up, 'Aumentar $what', () => _step(c, steps, true)),
+        ]),
+      ]);
 
   @override
   Widget build(BuildContext context) {
@@ -104,9 +140,21 @@ class _SetPageState extends State<SetPage> {
         ),
       ],
       const SizedBox(height: 14),
-      ResponsiveGrid(minTileWidth: 260, children: [
-        _input('Corrente programada', 'mA', ma),
-        _input('Tempo programado', 'ms', ms),
+      Card(
+        child: ListTile(
+          dense: true,
+          leading: const Icon(Icons.electric_bolt, color: XColors.blue),
+          title: Text('Gerador: ${s.generatorType.label}',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          subtitle: Text('Setas ▲▼ seguem as estações padrão deste tipo • mA até '
+              '${fmtTrim(s.generatorType.maxMa)} mA • tempo ${fmtTrim(s.generatorType.msSteps.first)} '
+              'a ${fmtTrim(s.generatorType.maxMs)} ms. Também é possível digitar qualquer valor.'),
+        ),
+      ),
+      const SizedBox(height: 12),
+      ResponsiveGrid(minTileWidth: 300, children: [
+        _input('Corrente programada (mA SET)', 'mA', 'mA', ma, s.generatorType.maSteps),
+        _input('Tempo programado (SET)', 'ms', 'tempo', ms, s.generatorType.msSteps),
       ]),
       const SizedBox(height: 12),
       BigValueTile(

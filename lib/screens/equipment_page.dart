@@ -66,6 +66,8 @@ class EquipmentPage extends StatelessWidget {
                       ].join(' • ')),
                       Text('Série: ${e.serialLabel}'
                           '${e.internalId != null ? ' • ID interno: ${e.internalId}' : ''}'),
+                      Text('Gerador: ${e.generatorType.label}',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
                       Text('Aferição: ${fmtDate(e.calibrationDate)}'
                           '${e.technician != null ? ' • Resp.: ${e.technician}' : ''}',
                           style: const TextStyle(color: XColors.gray)),
@@ -125,6 +127,7 @@ class _EquipmentFormState extends State<EquipmentForm> {
   late final internalId = TextEditingController(text: widget.equipment?.internalId ?? '');
   late final technician = TextEditingController(text: widget.equipment?.technician ?? '');
   late DateTime? date = widget.equipment?.calibrationDate ?? DateTime.now();
+  late GeneratorType genType = widget.equipment?.generatorType ?? GeneratorType.highFrequency;
 
   String? _opt(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
 
@@ -152,6 +155,7 @@ class _EquipmentFormState extends State<EquipmentForm> {
       internalId: _opt(internalId),
       calibrationDate: date,
       technician: _opt(technician),
+      generatorType: genType,
       createdAt: old?.createdAt ?? now,
       updatedAt: now,
     );
@@ -232,6 +236,26 @@ class _EquipmentFormState extends State<EquipmentForm> {
               ),
             ),
           ]),
+          const SizedBox(height: 16),
+          const Text('Tipo de gerador',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: XColors.blueDark)),
+          const SizedBox(height: 8),
+          SegmentedButton<GeneratorType>(
+            showSelectedIcon: true,
+            segments: [
+              for (final t in GeneratorType.values)
+                ButtonSegment(value: t, label: Text(t.label, textAlign: TextAlign.center)),
+            ],
+            selected: {genType},
+            onSelectionChanged: (v) => setState(() => genType = v.first),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Define os valores das setas ▲▼ no SET '
+            '(mA até ${fmt(genType.maxMa, 0)} mA, tempo de ${fmt(genType.msSteps.first, genType.msSteps.first < 10 ? 1 : 0)} '
+            'a ${fmt(genType.maxMs, 0)} ms) e a tolerância usada.',
+            style: const TextStyle(color: XColors.gray),
+          ),
           const SizedBox(height: 20),
           FilledButton.icon(
             onPressed: _save,

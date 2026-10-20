@@ -60,7 +60,10 @@ class AppState extends ChangeNotifier {
   bool _io = false;
   bool _disposed = false;
 
-  Tolerances get tol => settings.tolerances;
+  GeneratorType get generatorType => selected?.generatorType ?? GeneratorType.highFrequency;
+
+  /// Tolerância do tipo de gerador do equipamento selecionado.
+  Tolerances get tol => settings.tolFor(generatorType);
   bool get connected => link == LinkState.connected;
 
   List<Reading> get sessionReadings =>
@@ -148,7 +151,7 @@ class AppState extends ChangeNotifier {
     final s = session;
     if (s == null) return 'Selecione um equipamento';
     if (ma == null || ms == null) return 'Informe mA e tempo numéricos';
-    if (ma <= 0 || ma > 2000) return 'mA SET deve estar entre 0 e 2000 mA';
+    if (ma <= 0 || ma > 800) return 'mA SET deve estar entre 0 e 800 mA';
     if (ms <= 0 || ms > 10000) return 'Tempo SET deve estar entre 0 e 10000 ms';
     if (ma == s.setMa && ms == s.setMs) {
       _say('SET sem alteração');
@@ -322,8 +325,8 @@ class AppState extends ChangeNotifier {
       final cursor = await db.cursor(dev);
       final res = await api.readings(cursor);
       if (res.deviceId != dev) throw const MeterException('Instrumento trocado durante a sincronização');
-      final m = await db.mergeDeviceReadings(dev, res.nextCursor, res.items, tol,
-          deviceSimulated: deviceSimulated);
+      final m = await db.mergeDeviceReadings(dev, res.nextCursor, res.items, settings.tolerances,
+          deviceSimulated: deviceSimulated, convTol: settings.tolerancesConv);
       total += m.inserted;
       dup += m.duplicates;
       rej += m.rejected;

@@ -29,3 +29,23 @@
 - `more` em `/v1/readings` para paginação.
 - `waveform` opcional por disparo.
 - `simulated` em `/v1/device` e nos itens, para o simulador de bancada.
+
+# Alterações V1.6.0 → V1.7.0
+
+| Melhoria | Detalhe |
+|---|---|
+| Tolerância gravada em cada medição | Mudar a tolerância depois não altera resultados antigos; CSV mostra a tolerância aplicada |
+| Medições reais protegidas | Gatilhos no banco impedem apagar ou alterar medições do instrumento e o registro de alterações |
+| Equipamentos arquivados | "Excluir" virou "Arquivar"; medições preservadas; pode restaurar |
+| SET travado por sessão | Mudar o SET depois do primeiro disparo abre nova sessão automaticamente |
+| Registro de alterações | Cadastro, SET, sessões, sincronização, configurações e backups com data/hora (Configurações → Registro de alterações) |
+| Backup | Backup completo (.json) compartilhável por WhatsApp/Drive/e-mail; restauração salva antes uma cópia dos dados atuais; token não vai no backup |
+| Compartilhar | CSV e relatório pelo menu de compartilhamento do Android |
+| Setas ▲▼ no SET | mA e tempo independentes, pulando para a próxima estação padrão |
+| Tipo de gerador | Alta frequência (série R10: 10–800 mA, 1 ms–6,3 s) ou convencional microprocessado (25–800 mA, 10 ms–5 s) por equipamento |
+| Tolerâncias por tipo de gerador | Configuráveis separadamente para alta frequência e convencional |
+| Limite de mA | SET até 800 mA |
+| APK release assinado | Gerado automaticamente quando os segredos da chave UNITECH estão cadastrados no GitHub |
+
+As tabelas de estações ficam em `lib/calc.dart` (`maSteps` / `msSteps`) e podem ser ajustadas
+aos modelos atendidos pela UNITECH.

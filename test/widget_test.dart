@@ -46,9 +46,16 @@ void main() {
     await tester.tap(find.text('SET').last);
     await tester.pump();
     expect(find.text('20,00'), findsOneWidget);
+    // Setas: mA 200 → 250 (▲), tempo 100 → 80 (▼) na série de alta frequência.
+    await tester.tap(find.byTooltip('Aumentar mA'));
+    await tester.pump();
+    expect(find.text('25,00'), findsOneWidget);
+    await tester.tap(find.byTooltip('Diminuir tempo'));
+    await tester.pump();
+    expect(find.text('20,00'), findsOneWidget, reason: '250 mA × 80 ms = 20,00 mAs');
     await tester.enterText(find.byType(TextField).first, '100');
     await tester.pump();
-    expect(find.text('10,00'), findsOneWidget);
+    expect(find.text('8,00'), findsOneWidget);
 
     // Painel READ sem instrumento não mostra números inventados.
     await tester.tap(find.text('Medições'));

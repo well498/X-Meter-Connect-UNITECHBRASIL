@@ -24,6 +24,10 @@ class _SettingsPageState extends State<SettingsPage> {
   late final tolMs = TextEditingController(text: fmt(st.tolerances.msPct, 1));
   late final tolMas = TextEditingController(text: fmt(st.tolerances.masPct, 1));
   late final alert = TextEditingController(text: fmt(st.tolerances.alertFraction * 100, 0));
+  late final cTolMa = TextEditingController(text: fmt(st.tolerancesConv.maPct, 1));
+  late final cTolMs = TextEditingController(text: fmt(st.tolerancesConv.msPct, 1));
+  late final cTolMas = TextEditingController(text: fmt(st.tolerancesConv.masPct, 1));
+  late final cAlert = TextEditingController(text: fmt(st.tolerancesConv.alertFraction * 100, 0));
   late bool autoReconnect = st.autoReconnect;
   late bool demoMode = st.demoMode;
   bool showToken = false;
@@ -31,7 +35,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   void dispose() {
-    for (final c in [host, port, token, tolMa, tolMs, tolMas, alert]) {
+    for (final c in [host, port, token, tolMa, tolMs, tolMas, alert, cTolMa, cTolMs, cTolMas, cAlert]) {
       c.dispose();
     }
     super.dispose();
@@ -39,15 +43,22 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<bool> _save() async {
     final p = int.tryParse(port.text.trim());
-    final a = parseNum(tolMa.text), b = parseNum(tolMs.text), c = parseNum(tolMas.text);
-    final f = parseNum(alert.text);
+    Tolerances? read(TextEditingController ma, TextEditingController ms, TextEditingController mas,
+        TextEditingController al) {
+      final a = parseNum(ma.text), b = parseNum(ms.text), c = parseNum(mas.text), f = parseNum(al.text);
+      if ([a, b, c].any((v) => v == null || v <= 0 || v > 100)) return null;
+      if (f == null || f <= 0 || f > 100) return null;
+      return Tolerances(maPct: a!, msPct: b!, masPct: c!, alertFraction: f / 100);
+    }
+
+    final hf = read(tolMa, tolMs, tolMas, alert);
+    final conv = read(cTolMa, cTolMs, cTolMas, cAlert);
     String? err;
     if (host.text.trim().isEmpty) err = 'Informe o IP do instrumento';
     if (p == null || p < 1 || p > 65535) err = 'Porta inválida (1–65535)';
-    for (final v in [a, b, c]) {
-      if (v == null || v <= 0 || v > 100) err = 'Tolerâncias devem estar entre 0 e 100 %';
+    if (hf == null || conv == null) {
+      err = 'Tolerâncias e início do alerta devem estar entre 0 e 100 %';
     }
-    if (f == null || f <= 0 || f > 100) err = 'Início do alerta deve estar entre 1 e 100 %';
     setState(() => error = err);
     if (err != null) return false;
     await widget.state.saveSettings(widget.state.settings.copyWith(
@@ -56,7 +67,8 @@ class _SettingsPageState extends State<SettingsPage> {
       token: token.text.trim(),
       autoReconnect: autoReconnect,
       demoMode: demoMode,
-      tolerances: Tolerances(maPct: a!, msPct: b!, masPct: c!, alertFraction: f! / 100),
+      tolerances: hf,
+      tolerancesConv: conv,
     ));
     return true;
   }
@@ -196,12 +208,20 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Text('Instrumento: ${s.deviceId}${s.firmware != null ? ' • firmware ${s.firmware}' : ''}'),
         ),
       const SizedBox(height: 10),
-      const SectionTitle('Tolerâncias de aprovação (±)'),
+      const SectionTitle('Tolerâncias — alta frequência (±)'),
       ResponsiveGrid(minTileWidth: 200, children: [
         _num('Corrente (mA)', tolMa, '%'),
         _num('Tempo (ms)', tolMs, '%'),
         _num('mAs', tolMas, '%'),
         _num('Alerta a partir de', alert, '% da tol.'),
+      ]),
+      const SizedBox(height: 10),
+      const SectionTitle('Tolerâncias — convencional microprocessado (±)'),
+      ResponsiveGrid(minTileWidth: 200, children: [
+        _num('Corrente (mA)', cTolMa, '%'),
+        _num('Tempo (ms)', cTolMs, '%'),
+        _num('mAs', cTolMas, '%'),
+        _num('Alerta a partir de', cAlert, '% da tol.'),
       ]),
       const SizedBox(height: 6),
       const Text(

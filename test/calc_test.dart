@@ -63,4 +63,50 @@ void main() {
     expect(fmtSigned(-2.5), '-2,50');
     expect(fmt(null), '—');
   });
+
+  group('setas ▲▼ e estações padrão', () {
+    test('alta frequência: série R10 até 800 mA', () {
+      final t = GeneratorType.highFrequency;
+      expect(t.maxMa, 800);
+      expect(stepValue(t.maSteps, 200, up: true), 250);
+      expect(stepValue(t.maSteps, 200, up: false), 160);
+      expect(stepValue(t.msSteps, 100, up: true), 125);
+      expect(stepValue(t.msSteps, 100, up: false), 80);
+      expect(stepValue(t.maSteps, 800, up: true), 800, reason: 'não passa do máximo');
+      expect(stepValue(t.maSteps, 10, up: false), 10, reason: 'não passa do mínimo');
+    });
+
+    test('convencional microprocessado', () {
+      final t = GeneratorType.conventional;
+      expect(t.maxMa, 800);
+      expect(t.msSteps.first, 10);
+      expect(stepValue(t.maSteps, 200, up: true), 250);
+      expect(stepValue(t.maSteps, 200, up: false), 150);
+      expect(stepValue(t.msSteps, 100, up: true), 120);
+    });
+
+    test('valor digitado fora da tabela vai para a estação vizinha', () {
+      final steps = GeneratorType.highFrequency.maSteps;
+      expect(stepValue(steps, 210, up: true), 250);
+      expect(stepValue(steps, 210, up: false), 200);
+    });
+
+    test('todas as tabelas em ordem crescente e mA ≤ 800', () {
+      for (final t in GeneratorType.values) {
+        for (final list in [t.maSteps, t.msSteps]) {
+          for (var i = 1; i < list.length; i++) {
+            expect(list[i] > list[i - 1], isTrue);
+          }
+        }
+        expect(t.maSteps.every((v) => v <= 800), isTrue);
+      }
+    });
+
+    test('formatação das estações', () {
+      expect(fmtTrim(200), '200');
+      expect(fmtTrim(12.5), '12,5');
+      expect(fmtTrim(1.25), '1,25');
+      expect(fmtTrim(6.3), '6,3');
+    });
+  });
 }
