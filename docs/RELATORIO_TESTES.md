@@ -1,3 +1,21 @@
+# Relatório de testes — V1.8.0 (compilação nº 6)
+
+Execução: https://github.com/well498/X-Meter-Connect-UNITECHBRASIL/actions/runs/39451127092
+Resultado: ✅ análise sem erros · ✅ todos os testes automatizados · ✅ APK `UNITECH_XMETER_CONNECT_v1.8.0_teste_6.apk`
+
+Novos testes: integração por trapézios (amostras irregulares), detecção de exposição
+(200 mA × 100 ms = 20,00 mAs a 100 kS/s, 5 ms, amostragem grossa, linha de base, pico de ruído,
+pulso curto, sem exposição, gerador de 2 pulsos, dois disparos, janela cortada, saturação),
+estatística (média, DP, CV), 5 tipos de gerador, limites do manual e setas ▲▼, banco v4
+(gerador, foto, pico, qualidade, sonda, calibração, observações protegidas, conferência de
+mAs divergente, sessão identificada), armar instrumento, SET fora dos limites, demonstração por
+tipo de gerador, Limpar, interface nova em celular e tablet.
+
+Compilação nº 5: um teste de interface esperava "X-METER" uma única vez (aparece também no
+indicador de conexão); expectativa corrigida.
+
+---
+
 # Relatório de testes — V1.7.0 (compilação nº 4)
 
 Execução: https://github.com/well498/X-Meter-Connect-UNITECHBRASIL/actions/runs/39446485727
