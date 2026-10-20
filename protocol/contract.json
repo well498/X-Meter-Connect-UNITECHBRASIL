@@ -1,0 +1,33 @@
+{
+  "status": "PROPOSTA - nao implementado no firmware; ver docs/PROTOCOLO_PROPOSTO.md",
+  "version": 1,
+  "transport": "HTTP/JSON sobre Wi-Fi AP do ESP32-S3, padrao 192.168.4.1:8080",
+  "auth": "Authorization: Bearer <token>; somente bancada. Producao exige canal autenticado e criptografado.",
+  "endpoints": {
+    "GET /v1/device": {
+      "response": {"device_id": "XMETER-0001", "protocol_version": 1, "firmware": "0.1.0", "simulated": false}
+    },
+    "PUT /v1/session/set": {
+      "request": {"session_id": "session-multix-b-initial", "set_ma": 200, "set_ms": 100, "set_mas": 20},
+      "response": {"accepted": true, "session_id": "session-multix-b-initial"}
+    },
+    "GET /v1/readings?after=0&limit=100": {
+      "response": {
+        "device_id": "XMETER-0001",
+        "next_cursor": 1,
+        "more": false,
+        "items": [
+          {
+            "shot_id": "000001",
+            "session_id": "session-multix-b-initial",
+            "quality": "valid",
+            "set_ma": 200, "set_ms": 100,
+            "read_ma": 201.3, "read_ms": 99.8, "read_mas": 20.06,
+            "recorded_at": "2026-10-20T13:05:11Z",
+            "waveform": {"sample_period_us": 500.0, "ma": [0.0, 120.0, 201.0, 201.5, 0.0]}
+          }
+        ]
+      }
+    }
+  }
+}

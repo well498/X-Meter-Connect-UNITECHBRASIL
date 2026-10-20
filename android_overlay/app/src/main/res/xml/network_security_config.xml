@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Release: HTTP sem criptografia permitido SOMENTE para o Access Point do X-METER.
+     A versão de produção deve migrar para TLS/canal autenticado (ver docs/PROTOCOLO_PROPOSTO.md). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.4.1</domain>
+    </domain-config>
+</network-security-config>

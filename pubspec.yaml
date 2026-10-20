@@ -1,0 +1,23 @@
+name: unitech_xmeter_connect
+description: UNITECH X-METER CONNECT — aplicativo de campo para o medidor de mA, tempo e mAs UNITECH X-METER.
+publish_to: none
+version: 1.6.0+16
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  sqflite: ^2.3.3
+  sqflite_common_ffi: ^2.3.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

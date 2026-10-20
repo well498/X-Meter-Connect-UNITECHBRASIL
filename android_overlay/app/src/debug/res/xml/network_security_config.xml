@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Somente no APK de TESTE (debug): HTTP liberado para qualquer IP da rede local,
+     para usar o simulador de bancada rodando no computador. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

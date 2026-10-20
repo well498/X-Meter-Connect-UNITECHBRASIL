@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "endpoints": {
+    "GET /v1/device": {
+      "device_id": "XMETER-001",
+      "protocol_version": 1
+    },
+    "PUT /v1/session/set": {
+      "request": {
+        "session_id": "session-multix-b-initial",
+        "set_ma": 200,
+        "set_ms": 100,
+        "set_mas": 20
+      },
+      "response": {
+        "accepted": true,
+        "session_id": "session-multix-b-initial"
+      }
+    },
+    "GET /v1/readings?after=0&limit=100": {
+      "device_id": "XMETER-001",
+      "next_cursor": 0,
+      "items": []
+    }
+  },
+  "auth": "Authorization: Bearer <token>; initial local HTTP only for lab, production must add authenticated encryption"
+}
