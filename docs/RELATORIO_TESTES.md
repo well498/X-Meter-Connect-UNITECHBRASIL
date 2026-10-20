@@ -1,3 +1,18 @@
+# Relatório de testes — V1.7.0 (compilação nº 4)
+
+Execução: https://github.com/well498/X-Meter-Connect-UNITECHBRASIL/actions/runs/39446485727
+Resultado: ✅ análise sem erros · ✅ todos os testes automatizados · ✅ APK `UNITECH_XMETER_CONNECT_v1.7.0_teste_4.apk`
+
+Novos testes automáticos nesta versão: tolerância gravada por medição, proteção contra exclusão
+e alteração de medições reais, arquivamento, SET travado por sessão, registro de alterações,
+backup completo (exportar/restaurar, token excluído, backup inválido não altera nada), setas ▲▼
+nas estações de alta frequência e convencional (até 800 mA), tolerância por tipo de gerador.
+
+Histórico: compilação nº 2 falhou no `flutter analyze` (API nova do `file_picker` 13);
+corrigido fixando a versão da biblioteca. Nº 3 serviu para diagnóstico.
+
+---
+
 # Relatório de testes — V1.6.0 (compilação nº 1)
 
 Execução: https://github.com/well498/X-Meter-Connect-UNITECHBRASIL/actions/runs/39437184401
