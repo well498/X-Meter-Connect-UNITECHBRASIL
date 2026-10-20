@@ -49,3 +49,22 @@
 
 As tabelas de estações ficam em `lib/calc.dart` (`maSteps` / `msSteps`) e podem ser ajustadas
 aos modelos atendidos pela UNITECH.
+
+# Alterações V1.7.0 → V1.8.0 (Prompt Master — Fase 1)
+
+| Item do prompt | Implementação |
+|---|---|
+| 3. Tipos de gerador | Alta frequência, monofásico 2 pulsos, trifásico 6 pulsos, trifásico 12 pulsos, a identificar/outro. "Convencional" da V1.7 vira "A identificar" (não presume) |
+| 3/7. Limites reais | Por equipamento: mA mín/máx, tempo mín/máx, mAs máx do manual; em branco usa a faixa de referência do tipo. SET fora dos limites é recusado. Setas ▲▼ respeitam os limites |
+| 4. Faixas-alvo | Constantes `InstrumentRange` (1–1.500 mA, 1–10.000 ms, 0,01–2.000 mAs); mAs tratado como limite independente |
+| 5. mAs por integração | `lib/analysis.dart`: regra dos trapézios com os instantes reais; corrente média = mAs ÷ tempo |
+| 5. Detecção da exposição | Limiar de início, histerese, duração mínima, pico robusto a ruído, indicadores de qualidade; configurável |
+| 5. Corrente máxima e média | Gravadas em cada medição (`ma_peak`, `read_ma`) |
+| 6. Gráfico | Zoom (pinça/botões), navegação, toque duplo; comparação de até 4 disparos; subida/descida 10–90 %, ondulação; exportação CSV |
+| 6/8. Repetibilidade | Aba Estatísticas: n, média, desvio padrão, CV, mín/máx por grandeza, limite de CV configurável |
+| 7. Cadastro | Fabricante/modelo do gerador, potência, limites, foto, identificação da sessão; Siemens Multix B com gerador "A identificar" |
+| 8. Interface | Tema escuro UNITECH conforme a tela de referência: logo, cartão do equipamento com foto e status, SET com setas, mAs esperado, abas Medição/Gráfico/Histórico/Estatísticas, botões Limpar · Iniciar Medição · Salvar |
+| 9. Iniciar medição | Protocolo v1.1 `POST /v1/acquisition/arm`: arma o instrumento; quem dispara é o operador |
+| 11. Persistência | Banco v4: sonda, estado de calibração, observações do técnico (somente inclusão), indicadores de qualidade |
+| 13. Relatórios | PDF técnico (logo, cliente, gerador, critérios, resumo, repetibilidade, tabela, forma de onda, observações, assinatura) |
+| Simulador | v1.1: armar, corrente máxima, indicadores, sonda; números consistentes com a análise do app |

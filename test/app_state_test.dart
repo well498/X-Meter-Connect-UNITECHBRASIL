@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:unitech_xmeter_connect/app_state.dart';
+import 'package:unitech_xmeter_connect/calc.dart';
 import 'package:unitech_xmeter_connect/database.dart';
 import 'package:unitech_xmeter_connect/meter_api.dart';
+import 'package:unitech_xmeter_connect/models.dart';
 
 /// Instrumento falso que segue o protocolo proposto v1 (docs/PROTOCOLO_PROPOSTO.md).
 class FakeInstrument {
@@ -15,6 +17,7 @@ class FakeInstrument {
   String? sessionId;
   final readings = <Map<String, Object?>>[];
   int setCalls = 0;
+  int armCalls = 0;
 
   int get port => server.port;
 
@@ -57,6 +60,11 @@ class FakeInstrument {
       sessionId = body['session_id'] as String;
       setCalls++;
       return send(200, {'accepted': true, 'session_id': sessionId});
+    }
+    if (req.method == 'POST' && path == '/v1/acquisition/arm') {
+      final body = jsonDecode(await utf8.decoder.bind(req).join()) as Map;
+      armCalls++;
+      return send(200, {'armed': body['session_id'] == sessionId, 'session_id': body['session_id']});
     }
     if (req.method == 'GET' && path == '/v1/readings') {
       final after = int.parse(req.uri.queryParameters['after'] ?? '0');
@@ -179,10 +187,60 @@ void main() {
     await state.generateDemoShot();
     expect(state.readings, isEmpty);
     await state.saveSettings(state.settings.copyWith(demoMode: true));
-    await state.generateDemoShot();
+    await state.startMeasurement(); // no modo demonstração, "Iniciar" simula um disparo
     expect(state.readings, hasLength(1));
-    expect(state.readings.single.isDemo, isTrue);
-    expect(state.readings.single.source, 'demo');
-    expect(state.readings.single.waveform, isNotNull);
+    final r = state.readings.single;
+    expect(r.isDemo, isTrue);
+    expect(r.source, 'demo');
+    expect(r.waveform, isNotNull);
+    expect(r.maPeak, isNotNull);
+    // mAs vem da integração; corrente média = mAs / tempo.
+    expect(r.readMa, closeTo(r.readMas * 1000 / r.readMs, 1e-6));
+    expect(r.readMas, closeTo(20, 3), reason: 'SET 200 mA × 100 ms com dispersão simulada');
+  });
+
+  test('demonstração respeita a forma de onda de cada tipo de gerador', () async {
+    await state.saveSettings(state.settings.copyWith(demoMode: true));
+    for (final t in GeneratorType.values) {
+      final e = state.selected!;
+      await state.saveEquipment(Equipment(
+          id: e.id, manufacturer: e.manufacturer, model: e.model, generatorType: t,
+          createdAt: e.createdAt, updatedAt: DateTime.now()));
+      await state.generateDemoShot();
+      final r = state.latest!;
+      expect(r.readMas, closeTo(20, 3), reason: t.label);
+      expect(r.quality, isNot(contains('multiplePulses')), reason: t.label);
+    }
+  });
+
+  test('Iniciar Medição arma o instrumento após enviar o SET', () async {
+    await state.connect();
+    await state.startMeasurement();
+    expect(inst.armCalls, 1);
+    expect(state.session!.setPending, isFalse);
+  });
+
+  test('SET fora dos limites do gerador é recusado', () async {
+    final e = state.selected!;
+    await state.saveEquipment(Equipment(
+        id: e.id, manufacturer: e.manufacturer, model: e.model, generatorType: GeneratorType.threePhase6p,
+        maxMa: 500, maxMas: 300, createdAt: e.createdAt, updatedAt: DateTime.now()));
+    expect(await state.saveSet(630, 100), contains('mA'));
+    expect(await state.saveSet(500, 1000), contains('mAs'));
+    expect(await state.saveSet(400, 100), isNull);
+    expect(state.session!.setMa, 400);
+  });
+
+  test('Limpar esconde o resultado sem apagar e observação fica gravada', () async {
+    await state.saveSettings(state.settings.copyWith(demoMode: true));
+    await state.generateDemoShot();
+    expect(state.displayed, isNotNull);
+    state.clearPanel();
+    expect(state.displayed, isNull);
+    expect(state.readings, hasLength(1));
+    await state.addNote('Teste de observação', readingUid: state.latest!.uid);
+    expect(state.notes.single.text, 'Teste de observação');
+    await state.generateDemoShot();
+    expect(state.displayed, isNotNull, reason: 'nova medição volta a aparecer');
   });
 }

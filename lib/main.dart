@@ -9,17 +9,13 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'app_state.dart';
 import 'database.dart';
 import 'screens/equipment_page.dart';
-import 'screens/history_page.dart';
 import 'screens/home_page.dart';
-import 'screens/read_page.dart';
 import 'screens/reports_page.dart';
-import 'screens/set_page.dart';
 import 'screens/settings_page.dart';
-import 'screens/waveform_page.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
-const appVersion = '1.7.0';
+const appVersion = '1.8.0';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -107,19 +103,16 @@ class _XMeterAppState extends State<XMeterApp> {
 
 class _Dest {
   final IconData icon;
+  final IconData selectedIcon;
   final String label;
-  const _Dest(this.icon, this.label);
+  const _Dest(this.icon, this.selectedIcon, this.label);
 }
 
 const _dests = [
-  _Dest(Icons.home_outlined, 'Início'),
-  _Dest(Icons.medical_services_outlined, 'Equipamentos'),
-  _Dest(Icons.tune, 'SET'),
-  _Dest(Icons.speed, 'Medições'),
-  _Dest(Icons.show_chart, 'Forma de onda'),
-  _Dest(Icons.history, 'Histórico'),
-  _Dest(Icons.description_outlined, 'Relatórios'),
-  _Dest(Icons.settings_outlined, 'Configurações'),
+  _Dest(Icons.home_outlined, Icons.home, 'Início'),
+  _Dest(Icons.assignment_outlined, Icons.assignment, 'Equipamentos'),
+  _Dest(Icons.description_outlined, Icons.description, 'Relatórios'),
+  _Dest(Icons.settings_outlined, Icons.settings, 'Configurações'),
 ];
 
 class Shell extends StatefulWidget {
@@ -138,94 +131,69 @@ class _ShellState extends State<Shell> {
   Widget _page(AppState s) => switch (index) {
         0 => HomePage(state: s, goTo: goTo, version: appVersion),
         1 => EquipmentPage(state: s),
-        2 => SetPage(state: s),
-        3 => ReadPage(state: s, goTo: goTo),
-        4 => WaveformPage(state: s),
-        5 => HistoryPage(state: s),
-        6 => ReportsPage(state: s),
+        2 => ReportsPage(state: s, version: appVersion),
         _ => SettingsPage(state: s, version: appVersion),
       };
-
-  Future<void> _more() async {
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          for (var i = 4; i < _dests.length; i++)
-            ListTile(
-              leading: Icon(_dests[i].icon, color: XColors.blue),
-              title: Text(_dests[i].label, style: const TextStyle(fontSize: 18)),
-              selected: index == i,
-              onTap: () => Navigator.pop(ctx, i),
-            ),
-        ]),
-      ),
-    );
-    if (picked != null) goTo(picked);
-  }
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: widget.state,
         builder: (context, _) {
           final s = widget.state;
-          final wide = MediaQuery.sizeOf(context).width >= 840;
-          final body = Column(children: [
-            if (s.settings.demoMode) const DemoBanner(),
-            Expanded(child: _page(s)),
-          ]);
+          final width = MediaQuery.sizeOf(context).width;
+          final wide = width >= 900;
+          // O painel principal tem cabeçalho próprio (logo UNITECH); as demais
+          // telas usam a barra superior padrão.
+          final Widget page = index == 0
+              ? _page(s)
+              : Column(children: [
+                  if (s.settings.demoMode) const DemoBanner(),
+                  Expanded(child: _page(s)),
+                ]);
           return Scaffold(
-            appBar: AppBar(
-              title: Text(wide ? 'UNITECH X-METER CONNECT' : 'X-METER CONNECT',
-                  style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.5)),
-              actions: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 12, left: 8),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: wide ? 340 : 170),
-                    child: InkWell(
-                      onTap: () => goTo(7),
-                      borderRadius: BorderRadius.circular(20),
-                      child: ConnectionChip(s),
-                    ),
+            appBar: index == 0
+                ? null
+                : AppBar(
+                    title: Text(_dests[index].label, style: const TextStyle(fontWeight: FontWeight.w800)),
+                    actions: [
+                      Padding(
+                        padding: const EdgeInsets.only(right: 12, left: 8),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: wide ? 340 : 190),
+                          child: InkWell(
+                            onTap: () => goTo(3),
+                            borderRadius: BorderRadius.circular(20),
+                            child: ConnectionChip(s),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
             body: wide
                 ? Row(children: [
                     NavigationRail(
-                      extended: MediaQuery.sizeOf(context).width >= 1180,
+                      extended: width >= 1180,
                       selectedIndex: index,
                       onDestinationSelected: goTo,
-                      labelType: MediaQuery.sizeOf(context).width >= 1180
-                          ? NavigationRailLabelType.none
-                          : NavigationRailLabelType.all,
+                      labelType: width >= 1180 ? NavigationRailLabelType.none : NavigationRailLabelType.all,
                       destinations: [
                         for (final d in _dests)
-                          NavigationRailDestination(icon: Icon(d.icon), label: Text(d.label)),
+                          NavigationRailDestination(
+                              icon: Icon(d.icon), selectedIcon: Icon(d.selectedIcon), label: Text(d.label)),
                       ],
                     ),
                     const VerticalDivider(width: 1),
-                    Expanded(child: body),
+                    Expanded(child: page),
                   ])
-                : body,
+                : page,
             bottomNavigationBar: wide
                 ? null
                 : NavigationBar(
-                    selectedIndex: index < 4 ? index : 4,
-                    onDestinationSelected: (i) {
-                      if (i < 4) {
-                        goTo(i);
-                      } else {
-                        _more();
-                      }
-                    },
+                    selectedIndex: index,
+                    onDestinationSelected: goTo,
                     destinations: [
-                      for (var i = 0; i < 4; i++)
-                        NavigationDestination(icon: Icon(_dests[i].icon), label: _dests[i].label),
-                      const NavigationDestination(icon: Icon(Icons.more_horiz), label: 'Mais'),
+                      for (final d in _dests)
+                        NavigationDestination(icon: Icon(d.icon), selectedIcon: Icon(d.selectedIcon), label: d.label),
                     ],
                   ),
           );

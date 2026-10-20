@@ -19,17 +19,36 @@ String? _str(Object? v) {
 
 double _dbl(Object? v, [double def = 0]) => v is num ? v.toDouble() : def;
 
+double? _optDbl(Object? v) => v is num && v.toDouble().isFinite ? v.toDouble() : null;
+
 class Equipment {
   final String id;
   final String? client;
   final String? site;
+
+  /// Fabricante e modelo do APARELHO de raios X.
   final String manufacturer;
   final String model;
   final String? serialNumber;
   final String? internalId;
   final DateTime? calibrationDate;
   final String? technician;
+
+  /// Gerador: tecnologia, fabricante, modelo e potência nominal.
   final GeneratorType generatorType;
+  final String? generatorMaker;
+  final String? generatorModel;
+  final double? powerKw;
+
+  /// Limites REAIS do manual técnico (null = faixa de referência do tipo).
+  final double? minMa;
+  final double? maxMa;
+  final double? minMs;
+  final double? maxMs;
+  final double? maxMas;
+
+  /// Foto do equipamento (arquivo no aparelho).
+  final String? photoPath;
   final bool archived;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -44,7 +63,16 @@ class Equipment {
     this.internalId,
     this.calibrationDate,
     this.technician,
-    this.generatorType = GeneratorType.highFrequency,
+    this.generatorType = GeneratorType.unknown,
+    this.generatorMaker,
+    this.generatorModel,
+    this.powerKw,
+    this.minMa,
+    this.maxMa,
+    this.minMs,
+    this.maxMs,
+    this.maxMas,
+    this.photoPath,
     this.archived = false,
     required this.createdAt,
     required this.updatedAt,
@@ -52,6 +80,20 @@ class Equipment {
 
   String get title => '$manufacturer $model';
   String get serialLabel => serialNumber ?? 'Não informado';
+
+  /// true quando algum limite veio do manual (e não da referência do tipo).
+  bool get hasCustomLimits =>
+      minMa != null || maxMa != null || minMs != null || maxMs != null || maxMas != null;
+
+  /// Limites efetivos: os do manual quando informados; senão os de referência.
+  GeneratorLimits get limits {
+    final r = generatorType.referenceLimits;
+    return GeneratorLimits(
+        minMa ?? r.minMa, maxMa ?? r.maxMa, minMs ?? r.minMs, maxMs ?? r.maxMs, maxMas ?? r.maxMas);
+  }
+
+  List<double> get maStations => stepsWithin(generatorType.maSteps, limits.minMa, limits.maxMa);
+  List<double> get msStations => stepsWithin(generatorType.msSteps, limits.minMs, limits.maxMs);
 
   Map<String, Object?> toMap() => {
         'id': id,
@@ -64,6 +106,15 @@ class Equipment {
         'calibration_date': calibrationDate?.toIso8601String(),
         'technician': technician,
         'generator_type': generatorType.code,
+        'generator_maker': generatorMaker,
+        'generator_model': generatorModel,
+        'power_kw': powerKw,
+        'min_ma': minMa,
+        'max_ma': maxMa,
+        'min_ms': minMs,
+        'max_ms': maxMs,
+        'max_mas': maxMas,
+        'photo_path': photoPath,
         'archived': archived ? 1 : 0,
         'created_at': createdAt.toUtc().toIso8601String(),
         'updated_at': updatedAt.toUtc().toIso8601String(),
@@ -80,10 +131,25 @@ class Equipment {
         calibrationDate: DateTime.tryParse(m['calibration_date']?.toString() ?? ''),
         technician: _str(m['technician']),
         generatorType: GeneratorTypeInfo.fromCode(m['generator_type']?.toString()),
+        generatorMaker: _str(m['generator_maker']),
+        generatorModel: _str(m['generator_model']),
+        powerKw: _optDbl(m['power_kw']),
+        minMa: _optDbl(m['min_ma']),
+        maxMa: _optDbl(m['max_ma']),
+        minMs: _optDbl(m['min_ms']),
+        maxMs: _optDbl(m['max_ms']),
+        maxMas: _optDbl(m['max_mas']),
+        photoPath: _str(m['photo_path']),
         archived: (m['archived'] as int? ?? 0) == 1,
         createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '') ?? DateTime.now(),
         updatedAt: DateTime.tryParse(m['updated_at']?.toString() ?? '') ?? DateTime.now(),
       );
+
+  Equipment copyWith({String? photoPath, GeneratorType? generatorType}) => Equipment.fromMap({
+        ...toMap(),
+        if (photoPath != null) 'photo_path': photoPath,
+        if (generatorType != null) 'generator_type': generatorType.code,
+      });
 }
 
 class MeasureSession {
@@ -96,6 +162,9 @@ class MeasureSession {
   final String? deviceId;
   final DateTime startedAt;
 
+  /// Identificação da sessão dada pelo técnico (opcional).
+  final String? label;
+
   const MeasureSession({
     required this.id,
     required this.equipmentId,
@@ -105,6 +174,7 @@ class MeasureSession {
     this.setConfirmedAt,
     this.deviceId,
     required this.startedAt,
+    this.label,
   });
 
   double get setMas => masFrom(setMa, setMs);
@@ -118,6 +188,7 @@ class MeasureSession {
         setConfirmedAt: DateTime.tryParse(m['set_confirmed_at']?.toString() ?? ''),
         deviceId: _str(m['device_id']),
         startedAt: DateTime.tryParse(m['started_at']?.toString() ?? '') ?? DateTime.now(),
+        label: _str(m['label']),
       );
 }
 
@@ -180,6 +251,16 @@ class Reading {
   /// Tolerância vigente quando a medição foi gravada (rastreabilidade).
   final Tolerances? tolerances;
 
+  /// Corrente máxima durante a exposição (mA). [readMa] é a corrente média.
+  final double? maPeak;
+
+  /// Indicadores de qualidade da aquisição (códigos).
+  final List<String> quality;
+
+  /// Identificação da sonda e estado de calibração informados pelo instrumento.
+  final String? probeId;
+  final String? calStatus;
+
   const Reading({
     required this.uid,
     required this.deviceId,
@@ -200,6 +281,10 @@ class Reading {
     required this.recordedAt,
     required this.receivedAt,
     this.tolerances,
+    this.maPeak,
+    this.quality = const [],
+    this.probeId,
+    this.calStatus,
   });
 
   /// Verdadeiro para QUALQUER dado não real (demonstração ou simulador).
@@ -242,8 +327,41 @@ class Reading {
               alertFraction: _dbl(m['alert_fraction'], 0.8),
             )
           : null,
+      maPeak: opt(m['ma_peak']),
+      quality: _strList(m['quality']),
+      probeId: _str(m['probe_id']),
+      calStatus: _str(m['cal_status']),
     );
   }
+}
+
+List<String> _strList(Object? raw) {
+  if (raw is List) return raw.map((e) => e.toString()).toList();
+  if (raw is String && raw.isNotEmpty) {
+    try {
+      final d = jsonDecode(raw);
+      if (d is List) return d.map((e) => e.toString()).toList();
+    } catch (_) {}
+  }
+  return const [];
+}
+
+/// Observação do técnico (registro somente de inclusão; não é editável).
+class Note {
+  final int id;
+  final String sessionId;
+  final String? readingUid;
+  final String text;
+  final DateTime at;
+  const Note(this.id, this.sessionId, this.readingUid, this.text, this.at);
+
+  factory Note.fromMap(Map<String, Object?> m) => Note(
+        m['id'] as int,
+        m['session_id'].toString(),
+        _str(m['reading_uid']),
+        m['text'].toString(),
+        DateTime.tryParse(m['at']?.toString() ?? '') ?? DateTime.now(),
+      );
 }
 
 /// Avalia a medição com a tolerância GRAVADA nela; [fallback] só é usado em
@@ -293,13 +411,23 @@ class AppSettings {
   final int port;
   final String token;
   final bool autoReconnect;
-  /// Tolerâncias para geradores de alta frequência.
+
+  /// Tolerâncias para geradores de alta frequência (e "a identificar").
   final Tolerances tolerances;
 
-  /// Tolerâncias para geradores convencionais microprocessados.
+  /// Tolerâncias para geradores convencionais (2, 6 e 12 pulsos).
   final Tolerances tolerancesConv;
   final bool demoMode;
   final String? selectedEquipmentId;
+
+  /// Detecção da exposição: limiar de início/medição do tempo (% do pico),
+  /// limiar de fim (histerese, % do pico) e duração mínima (ms).
+  final double detStartPct;
+  final double detEndPct;
+  final double detMinMs;
+
+  /// Limite do coeficiente de variação (%) na repetibilidade.
+  final double cvLimitPct;
 
   const AppSettings({
     this.host = '192.168.4.1',
@@ -310,6 +438,10 @@ class AppSettings {
     this.tolerancesConv = const Tolerances(),
     this.demoMode = false,
     this.selectedEquipmentId,
+    this.detStartPct = 50,
+    this.detEndPct = 40,
+    this.detMinMs = 0.5,
+    this.cvLimitPct = 5,
   });
 
   AppSettings copyWith({
@@ -321,6 +453,10 @@ class AppSettings {
     Tolerances? tolerancesConv,
     bool? demoMode,
     String? selectedEquipmentId,
+    double? detStartPct,
+    double? detEndPct,
+    double? detMinMs,
+    double? cvLimitPct,
   }) =>
       AppSettings(
         host: host ?? this.host,
@@ -331,7 +467,15 @@ class AppSettings {
         tolerancesConv: tolerancesConv ?? this.tolerancesConv,
         demoMode: demoMode ?? this.demoMode,
         selectedEquipmentId: selectedEquipmentId ?? this.selectedEquipmentId,
+        detStartPct: detStartPct ?? this.detStartPct,
+        detEndPct: detEndPct ?? this.detEndPct,
+        detMinMs: detMinMs ?? this.detMinMs,
+        cvLimitPct: cvLimitPct ?? this.cvLimitPct,
       );
+
+  /// Convencionais (2, 6 e 12 pulsos) usam [tolerancesConv]; HF e
+  /// "a identificar" usam [tolerances].
+  Tolerances tolFor(GeneratorType t) => t.isConventional ? tolerancesConv : tolerances;
 
   Map<String, String> toMap() => {
         'host': host,
@@ -347,11 +491,12 @@ class AppSettings {
         'conv_tol_mas': tolerancesConv.masPct.toString(),
         'conv_alert_fraction': tolerancesConv.alertFraction.toString(),
         'demo_mode': demoMode ? '1' : '0',
+        'det_start_pct': detStartPct.toString(),
+        'det_end_pct': detEndPct.toString(),
+        'det_min_ms': detMinMs.toString(),
+        'cv_limit_pct': cvLimitPct.toString(),
         if (selectedEquipmentId != null) 'selected_equipment': selectedEquipmentId!,
       };
-
-  Tolerances tolFor(GeneratorType t) =>
-      t == GeneratorType.conventional ? tolerancesConv : tolerances;
 
   factory AppSettings.fromMap(Map<String, String> m) {
     const d = AppSettings();
@@ -375,6 +520,10 @@ class AppSettings {
       ),
       demoMode: (m['demo_mode'] ?? '0') == '1',
       selectedEquipmentId: m['selected_equipment'],
+      detStartPct: n('det_start_pct', d.detStartPct),
+      detEndPct: n('det_end_pct', d.detEndPct),
+      detMinMs: n('det_min_ms', d.detMinMs),
+      cvLimitPct: n('cv_limit_pct', d.cvLimitPct),
     );
   }
 }

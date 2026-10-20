@@ -315,16 +315,16 @@ void main() {
   test('tipo de gerador é salvo e define a tolerância aplicada', () async {
     final db = await open();
     final e = (await db.equipment(seedEquipmentId))!;
-    expect(e.generatorType, GeneratorType.highFrequency);
+    expect(e.generatorType, GeneratorType.unknown, reason: 'cadastro inicial: tipo de gerador a identificar');
     await db.saveEquipment(Equipment(
       id: e.id,
       manufacturer: e.manufacturer,
       model: e.model,
-      generatorType: GeneratorType.conventional,
+      generatorType: GeneratorType.threePhase6p,
       createdAt: e.createdAt,
       updatedAt: DateTime.now(),
     ));
-    expect((await db.equipment(e.id))!.generatorType, GeneratorType.conventional);
+    expect((await db.equipment(e.id))!.generatorType, GeneratorType.threePhase6p);
     await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances(masPct: 10),
         convTol: const Tolerances(masPct: 5));
     final r = (await db.readings()).single;
@@ -338,8 +338,89 @@ void main() {
         tolerances: Tolerances(maPct: 10), tolerancesConv: Tolerances(maPct: 15, alertFraction: 0.7)));
     final st = await db.loadSettings();
     expect(st.tolFor(GeneratorType.highFrequency).maPct, 10);
-    expect(st.tolFor(GeneratorType.conventional).maPct, 15);
-    expect(st.tolFor(GeneratorType.conventional).alertFraction, 0.7);
+    expect(st.tolFor(GeneratorType.singlePhase2p).maPct, 15);
+    expect(st.tolFor(GeneratorType.unknown).maPct, 10);
+    expect(st.tolFor(GeneratorType.threePhase12p).alertFraction, 0.7);
+    await db.db.close();
+  });
+
+  test('v4: gerador, limites do manual e foto são gravados', () async {
+    final db = await open();
+    final e = (await db.equipment(seedEquipmentId))!;
+    await db.setPhoto(e.id, '/tmp/foto.jpg');
+    await db.saveEquipment(Equipment(
+      id: e.id,
+      manufacturer: e.manufacturer,
+      model: e.model,
+      generatorType: GeneratorType.highFrequency,
+      generatorMaker: 'Siemens',
+      generatorModel: 'Polydoros',
+      powerKw: 50,
+      maxMa: 500,
+      maxMs: 5000,
+      maxMas: 400,
+      createdAt: e.createdAt,
+      updatedAt: DateTime.now(),
+    ));
+    final again = (await db.equipment(e.id))!;
+    expect(again.generatorModel, 'Polydoros');
+    expect(again.powerKw, 50);
+    expect(again.photoPath, '/tmp/foto.jpg', reason: 'editar o cadastro não apaga a foto');
+    expect(again.hasCustomLimits, isTrue);
+    expect(again.limits.maxMa, 500);
+    expect(again.limits.minMa, 10, reason: 'mínimo não informado vem da referência HF');
+    expect(again.maStations.last, 500);
+    await db.db.close();
+  });
+
+  test('v4: pico, qualidade, sonda e calibração vindos do instrumento', () async {
+    final db = await open();
+    await db.mergeDeviceReadings('XM-1', 1, [
+      {
+        ...shot('1'),
+        'ma_peak': 215.5,
+        'flags': ['noisyBaseline'],
+        'probe_id': 'SONDA-07',
+        'cal_status': 'valida ate 2027-10',
+      }
+    ], const Tolerances());
+    final r = (await db.readings()).single;
+    expect(r.maPeak, 215.5);
+    expect(r.quality, ['noisyBaseline']);
+    expect(r.probeId, 'SONDA-07');
+    expect(r.calStatus, 'valida ate 2027-10');
+    await db.db.close();
+  });
+
+  test('v4: conferência da forma de onda sinaliza mAs divergente', () async {
+    final db = await open();
+    // Forma de onda de 200 mA × 100 ms (= 20 mAs), mas o item informa 25 mAs.
+    final wave = [for (var i = 0; i < 1200; i++) (i >= 100 && i < 1100) ? 200.0 : 0.0];
+    await db.mergeDeviceReadings('XM-1', 1, [
+      {...shot('1', mas: 25), 'waveform': {'sample_period_us': 100, 'ma': wave}},
+      {...shot('2', mas: 20), 'waveform': {'sample_period_us': 100, 'ma': wave}},
+    ], const Tolerances());
+    final rs = await db.readings();
+    expect(rs.firstWhere((r) => r.shotId == '1').quality, contains('verificacao_mas_divergente'));
+    expect(rs.firstWhere((r) => r.shotId == '2').quality, isEmpty);
+    await db.db.close();
+  });
+
+  test('v4: observações ficam gravadas e não podem ser apagadas', () async {
+    final db = await open();
+    await db.addNote(seedSessionId, 'Colimador desalinhado');
+    await db.addNote(seedSessionId, '   ');
+    final notes = await db.notes(equipmentId: seedEquipmentId);
+    expect(notes, hasLength(1));
+    expect(notes.single.text, 'Colimador desalinhado');
+    await expectLater(db.db.delete('notes'), throwsA(anything));
+    await db.db.close();
+  });
+
+  test('v4: sessão com identificação', () async {
+    final db = await open();
+    final id = await db.newSession(seedEquipmentId, label: 'Aferição anual');
+    expect((await db.session(id))!.label, 'Aferição anual');
     await db.db.close();
   });
 }

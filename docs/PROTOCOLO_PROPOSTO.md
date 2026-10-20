@@ -1,4 +1,4 @@
-# Protocolo X-METER ↔ aplicativo — PROPOSTA v1
+# Protocolo X-METER ↔ aplicativo — PROPOSTA v1.1
 
 > **Status: proposta.** Nada disto existe no firmware ainda. Os endpoints abaixo são o
 > contrato que o aplicativo já implementa e que o ESP32-S3 deverá implementar.
@@ -84,6 +84,50 @@ Regras:
    2, 4, 8, 16 e depois a cada 30 s.
 3. Ao reconectar: reenvia o SET se estiver pendente e sincroniza a partir do cursor salvo.
 4. Se o `device_id` mudar, o app avisa e usa o cursor do novo instrumento.
+
+## Acréscimos da v1.1 (compatíveis com a v1)
+
+### `POST /v1/acquisition/arm`
+
+Prepara o instrumento para registrar a PRÓXIMA exposição. O operador dispara no comando do
+gerador; o X-METER apenas mede.
+
+```json
+{ "session_id": "ses-…" }          →  { "armed": true, "session_id": "ses-…" }
+```
+Resposta `409` se o SET da sessão ainda não foi recebido.
+
+### Campos adicionais em cada item de `/v1/readings`
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `read_ma` | número | Corrente **média** = `read_mas` × 1000 / `read_ms` |
+| `ma_peak` | número | Corrente máxima durante a exposição |
+| `flags` | lista | Indicadores de qualidade: `tooShort`, `startedBeforeWindow`, `endedAfterWindow`, `multiplePulses`, `noisyBaseline`, `saturated` |
+| `probe_id` | texto | Identificação da sonda conectada |
+| `cal_status` | texto | Estado da calibração (ex.: `valida ate 2027-10`, `vencida`) |
+
+`GET /v1/device` pode informar `probe_id`.
+
+### Algoritmo de medição (o mesmo em `lib/analysis.dart`, referência para o STM32)
+
+1. Linha de base = mediana dos primeiros 5 % das amostras; subtrair de todo o sinal.
+2. Nível de pico **robusto** = maior corrente mantida por pelo menos a duração mínima
+   (mínimo deslizante seguido de máximo). Picos isolados de ruído não deslocam os limiares.
+3. Detecção com histerese: início quando a corrente passa `det_start` % do pico (padrão 50 %);
+   o pulso só termina quando fica abaixo de `det_end` % (padrão 40 %) por mais de 9 ms
+   (atravessa os vales de geradores de 2 pulsos).
+4. Pulsos mais curtos que `det_min_ms` (padrão 0,5 ms) são descartados como ruído.
+5. **Tempo** = do cruzamento de subida ao último cruzamento de descida no MESMO nível
+   `det_start`, com interpolação linear entre amostras.
+6. **mAs** = integral da corrente pela regra dos trapézios, com os intervalos reais entre
+   amostras, do ponto em que a corrente sai da linha de base até voltar a ela.
+7. **Corrente média** = mAs ÷ tempo. **Corrente máxima** = maior amostra no pulso.
+8. O aplicativo refaz o cálculo a partir da forma de onda recebida e marca
+   `verificacao_mas_divergente` se a diferença no mAs passar de 2 %.
+
+Taxa-alvo de aquisição: 100 000 amostras/s. Para o aplicativo, o instrumento pode enviar a
+forma de onda reduzida (ex.: até 2 000 pontos), mas os valores READ devem vir da aquisição completa.
 
 ## Transporte 2 — Bluetooth Low Energy (futuro, NÃO implementado)
 

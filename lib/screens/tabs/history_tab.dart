@@ -1,22 +1,24 @@
 import 'package:flutter/material.dart';
 
-import '../app_state.dart';
-import '../calc.dart';
-import '../models.dart';
-import '../theme.dart';
-import '../widgets/common.dart';
+import '../../app_state.dart';
+import '../../calc.dart';
+import '../../models.dart';
+import '../../theme.dart';
+import '../../widgets/common.dart';
+import 'measure_tab.dart';
 
 enum _Filter { all, real, demo }
 
-class HistoryPage extends StatefulWidget {
+/// Histórico e comparação de disparos (tela 7).
+class HistoryTab extends StatefulWidget {
   final AppState state;
-  const HistoryPage({super.key, required this.state});
+  const HistoryTab({super.key, required this.state});
 
   @override
-  State<HistoryPage> createState() => _HistoryPageState();
+  State<HistoryTab> createState() => _HistoryTabState();
 }
 
-class _HistoryPageState extends State<HistoryPage> {
+class _HistoryTabState extends State<HistoryTab> {
   _Filter filter = _Filter.all;
   bool onlySession = false;
 
@@ -43,6 +45,15 @@ class _HistoryPageState extends State<HistoryPage> {
             'mAs: SET ${fmt(r.setMas)} • READ ${fmt(r.readMas)} • erro ${fmtSigned(ev.errMas)} %',
             'Resultado: ${r.isDemo ? 'SIMULADO' : ev.status.label}',
             'Forma de onda: ${r.waveform == null ? 'não recebida' : '${r.waveform!.ma.length} amostras'}',
+            if (r.maPeak != null) 'Corrente máxima: ${fmt(r.maPeak, 1)} mA',
+            if (r.tolerances != null)
+              'Tolerância aplicada: mA ±${fmt(r.tolerances!.maPct, 1)} % • ms ±${fmt(r.tolerances!.msPct, 1)} % • '
+                  'mAs ±${fmt(r.tolerances!.masPct, 1)} %',
+            if (r.probeId != null) 'Sonda: ${r.probeId}',
+            if (r.calStatus != null) 'Calibração: ${r.calStatus}',
+            for (final q in r.quality) 'Qualidade: ${qualityLabel(q)}',
+            for (final n in widget.state.notes.where((n) => n.readingUid == r.uid))
+              'Observação (${fmtDateTime(n.at)}): ${n.text}',
           ].join('\n')),
         ),
         actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Fechar'))],
@@ -59,8 +70,7 @@ class _HistoryPageState extends State<HistoryPage> {
     if (filter == _Filter.demo) list = list.where((r) => r.isDemo).toList();
     final sessions = s.readings.map((r) => r.sessionId).toSet().length;
 
-    return PageBody(children: [
-      SectionTitle('Histórico — ${s.selected?.title ?? ''}'),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('${s.readings.length} medição(ões) em $sessions sessão(ões) gravadas neste aparelho.',
           style: const TextStyle(color: XColors.gray)),
       const SizedBox(height: 10),

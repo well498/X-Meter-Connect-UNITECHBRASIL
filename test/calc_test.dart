@@ -64,42 +64,72 @@ void main() {
     expect(fmt(null), '—');
   });
 
-  group('setas ▲▼ e estações padrão', () {
-    test('alta frequência: série R10 até 800 mA', () {
-      final t = GeneratorType.highFrequency;
-      expect(t.maxMa, 800);
-      expect(stepValue(t.maSteps, 200, up: true), 250);
-      expect(stepValue(t.maSteps, 200, up: false), 160);
-      expect(stepValue(t.msSteps, 100, up: true), 125);
-      expect(stepValue(t.msSteps, 100, up: false), 80);
-      expect(stepValue(t.maSteps, 800, up: true), 800, reason: 'não passa do máximo');
-      expect(stepValue(t.maSteps, 10, up: false), 10, reason: 'não passa do mínimo');
+  group('tipos de gerador, limites e setas ▲▼', () {
+    test('5 tipos e códigos; "conv" antigo vira "a identificar"', () {
+      expect(GeneratorType.values, hasLength(5));
+      for (final t in GeneratorType.values) {
+        expect(GeneratorTypeInfo.fromCode(t.code), t);
+      }
+      expect(GeneratorTypeInfo.fromCode('conv'), GeneratorType.unknown);
+      expect(GeneratorTypeInfo.fromCode(null), GeneratorType.unknown);
+      expect(GeneratorType.threePhase6p.isConventional, isTrue);
+      expect(GeneratorType.highFrequency.isConventional, isFalse);
+      expect(GeneratorType.unknown.isConventional, isFalse);
     });
 
-    test('convencional microprocessado', () {
-      final t = GeneratorType.conventional;
-      expect(t.maxMa, 800);
-      expect(t.msSteps.first, 10);
-      expect(stepValue(t.maSteps, 200, up: true), 250);
-      expect(stepValue(t.maSteps, 200, up: false), 150);
-      expect(stepValue(t.msSteps, 100, up: true), 120);
+    test('faixas de referência', () {
+      final hf = GeneratorType.highFrequency.referenceLimits;
+      expect([hf.minMa, hf.maxMa, hf.minMs, hf.maxMs, hf.maxMas], [10, 1000, 1, 6300, 1000]);
+      final conv = GeneratorType.singlePhase2p.referenceLimits;
+      expect(conv.maxMa, 800);
+      expect(conv.maxMas, 500);
+      final unk = GeneratorType.unknown.referenceLimits;
+      expect([unk.maxMa, unk.maxMs, unk.maxMas], [InstrumentRange.maxMa, InstrumentRange.maxMs, InstrumentRange.maxMas]);
     });
 
-    test('valor digitado fora da tabela vai para a estação vizinha', () {
-      final steps = GeneratorType.highFrequency.maSteps;
-      expect(stepValue(steps, 210, up: true), 250);
-      expect(stepValue(steps, 210, up: false), 200);
+    test('setas seguem as estações R10 em HF', () {
+      final st = GeneratorType.highFrequency.maSteps;
+      expect(stepValue(st, 200, up: true), 250);
+      expect(stepValue(st, 200, up: false), 160);
+      expect(stepValue(GeneratorType.highFrequency.msSteps, 100, up: true), 125);
+      expect(stepValue(GeneratorType.highFrequency.msSteps, 100, up: false), 80);
+      expect(stepValue(st, 210, up: true), 250);
+      expect(stepValue(st, 210, up: false), 200);
     });
 
-    test('todas as tabelas em ordem crescente e mA ≤ 800', () {
+    test('setas em convencional', () {
+      final st = GeneratorType.threePhase12p.maSteps;
+      expect(stepValue(st, 200, up: true), 250);
+      expect(stepValue(st, 200, up: false), 150);
+      expect(stepValue(GeneratorType.threePhase12p.msSteps, 100, up: true), 120);
+    });
+
+    test('estações limitadas pelos limites do manual', () {
+      final st = stepsWithin(GeneratorType.highFrequency.maSteps, 25, 500);
+      expect(st.first, 25);
+      expect(st.last, 500);
+      expect(stepValue(st, 500, up: true), 500, reason: 'não passa do máximo do aparelho');
+      final odd = stepsWithin(GeneratorType.highFrequency.maSteps, 30, 450);
+      expect(odd.first, 30);
+      expect(odd.last, 450);
+    });
+
+    test('tabelas em ordem crescente', () {
       for (final t in GeneratorType.values) {
         for (final list in [t.maSteps, t.msSteps]) {
           for (var i = 1; i < list.length; i++) {
             expect(list[i] > list[i - 1], isTrue);
           }
         }
-        expect(t.maSteps.every((v) => v <= 800), isTrue);
       }
+    });
+
+    test('verificação do SET contra os limites', () {
+      const lim = GeneratorLimits(25, 500, 10, 5000, 400);
+      expect(lim.check(200, 100), isNull);
+      expect(lim.check(600, 100), contains('mA'));
+      expect(lim.check(200, 6000), contains('Tempo'));
+      expect(lim.check(500, 1000), contains('mAs'), reason: '500 mA × 1 s = 500 mAs > 400');
     });
 
     test('formatação das estações', () {

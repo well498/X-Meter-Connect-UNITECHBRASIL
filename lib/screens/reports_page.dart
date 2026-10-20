@@ -1,15 +1,19 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../calc.dart';
 import '../reports.dart';
+import '../reports_pdf.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
 class ReportsPage extends StatefulWidget {
   final AppState state;
-  const ReportsPage({super.key, required this.state});
+  final String version;
+  const ReportsPage({super.key, required this.state, this.version = ''});
 
   @override
   State<ReportsPage> createState() => _ReportsPageState();
@@ -35,6 +39,31 @@ class _ReportsPageState extends State<ReportsPage> {
     final stamp = DateTime.now();
     final base = 'xmeter_${eq.model.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')}_'
         '${stamp.year}${two(stamp.month)}${two(stamp.day)}_${two(stamp.hour)}${two(stamp.minute)}';
+
+    Future<void> exportPdf() async {
+      try {
+        Uint8List? logo;
+        try {
+          logo = (await rootBundle.load('assets/logo_unitech.png')).buffer.asUint8List();
+        } catch (_) {}
+        final bytes = await buildPdfReport(
+          eq: eq,
+          session: s.session,
+          readings: list,
+          notes: s.notes,
+          tol: s.tol,
+          includesSimulated: list.any((r) => r.isDemo),
+          appVersion: widget.version,
+          logoPng: logo,
+        );
+        final path = await s.saveExportBytes('$base.pdf', bytes);
+        if (!mounted) return;
+        setState(() => lastFile = path);
+        await s.shareFile(path, 'Relatório X-METER — ${eq.title}');
+      } catch (e) {
+        if (mounted) showSnack(this.context, 'Falha ao gerar PDF: $e');
+      }
+    }
 
     Future<void> export(String name, String content, {bool share = false}) async {
       try {
@@ -80,6 +109,12 @@ class _ReportsPageState extends State<ReportsPage> {
       ]),
       const SizedBox(height: 14),
       Wrap(spacing: 10, runSpacing: 10, children: [
+        FilledButton.icon(
+          onPressed: exportPdf,
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF16A34A), foregroundColor: Colors.white),
+          icon: const Icon(Icons.picture_as_pdf),
+          label: const Text('Relatório PDF'),
+        ),
         FilledButton.icon(
           onPressed: () => export('$base.csv', buildCsv(eq, list, s.tol), share: true),
           icon: const Icon(Icons.table_view),

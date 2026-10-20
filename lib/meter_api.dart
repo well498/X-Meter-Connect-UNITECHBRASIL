@@ -111,6 +111,13 @@ class MeterApi {
     }
   }
 
+  /// Arma a aquisição para registrar a próxima exposição (protocolo v1.1).
+  /// O instrumento apenas MEDE; quem dispara é o operador no comando.
+  Future<void> arm(String sessionId) async {
+    final j = await _request('POST', _uri('/v1/acquisition/arm'), {'session_id': sessionId});
+    if (j['armed'] != true) throw const MeterException('Instrumento não confirmou o início da medição');
+  }
+
   Future<ReadingsPage> readings(int after, {int limit = 100}) async {
     final j = await _request(
         'GET', _uri('/v1/readings', {'after': after.toString(), 'limit': limit.toString()}));

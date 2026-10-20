@@ -147,60 +147,123 @@ String fmtDate(DateTime? d) {
 }
 
 // ---------------------------------------------------------------------------
-// Tipos de gerador e valores padronizados de mA e tempo (setas ▲▼ do SET)
+// Tipos de gerador, faixas de referência e estações de mA / tempo (setas ▲▼)
 // ---------------------------------------------------------------------------
 
-enum GeneratorType { highFrequency, conventional }
+/// Faixa-alvo do instrumento UNITECH X-METER (requisito de projeto,
+/// ainda não comprovado metrologicamente).
+class InstrumentRange {
+  static const minMa = 1.0;
+  static const maxMa = 1500.0;
+  static const minMs = 1.0;
+  static const maxMs = 10000.0;
+  static const minMas = 0.01;
+  static const maxMas = 2000.0;
+}
+
+/// Limites de um gerador. Vêm do manual técnico do aparelho; quando não
+/// informados, usam-se as faixas de referência do tipo de gerador.
+class GeneratorLimits {
+  final double minMa;
+  final double maxMa;
+  final double minMs;
+  final double maxMs;
+  final double maxMas;
+  const GeneratorLimits(this.minMa, this.maxMa, this.minMs, this.maxMs, this.maxMas);
+
+  /// Mensagem de erro se o SET estiver fora dos limites, ou null.
+  String? check(double ma, double ms) {
+    if (ma < minMa || ma > maxMa) return 'mA SET fora da faixa do gerador (${fmtTrim(minMa)} a ${fmtTrim(maxMa)} mA)';
+    if (ms < minMs || ms > maxMs) return 'Tempo SET fora da faixa do gerador (${fmtTrim(minMs)} a ${fmtTrim(maxMs)} ms)';
+    final mas = masFrom(ma, ms);
+    if (mas > maxMas) return 'mAs SET ${fmt(mas)} excede o limite do gerador (${fmtTrim(maxMas)} mAs)';
+    if (mas < InstrumentRange.minMas) return 'mAs SET abaixo da faixa do instrumento';
+    return null;
+  }
+}
+
+enum GeneratorType { highFrequency, singlePhase2p, threePhase6p, threePhase12p, unknown }
 
 extension GeneratorTypeInfo on GeneratorType {
   String get code => switch (this) {
         GeneratorType.highFrequency => 'hf',
-        GeneratorType.conventional => 'conv',
+        GeneratorType.singlePhase2p => 'mono2p',
+        GeneratorType.threePhase6p => 'tri6p',
+        GeneratorType.threePhase12p => 'tri12p',
+        GeneratorType.unknown => 'unknown',
       };
 
   String get label => switch (this) {
-        GeneratorType.highFrequency => 'Alta frequência',
-        GeneratorType.conventional => 'Convencional microprocessado',
+        GeneratorType.highFrequency => 'Alta frequência (HF)',
+        GeneratorType.singlePhase2p => 'Convencional monofásico 2 pulsos',
+        GeneratorType.threePhase6p => 'Convencional trifásico 6 pulsos',
+        GeneratorType.threePhase12p => 'Convencional trifásico 12 pulsos',
+        GeneratorType.unknown => 'A identificar / outro',
       };
 
   String get shortLabel => switch (this) {
-        GeneratorType.highFrequency => 'AF',
-        GeneratorType.conventional => 'Conv.',
+        GeneratorType.highFrequency => 'HF',
+        GeneratorType.singlePhase2p => 'Mono 2P',
+        GeneratorType.threePhase6p => 'Tri 6P',
+        GeneratorType.threePhase12p => 'Tri 12P',
+        GeneratorType.unknown => 'A identificar',
       };
 
-  static GeneratorType fromCode(String? code) =>
-      code == 'conv' ? GeneratorType.conventional : GeneratorType.highFrequency;
+  bool get isConventional => switch (this) {
+        GeneratorType.singlePhase2p || GeneratorType.threePhase6p || GeneratorType.threePhase12p => true,
+        _ => false,
+      };
 
-  /// Estações de corrente (mA) típicas, até 800 mA.
+  /// 'conv' (V1.7) não dizia o número de pulsos: vira "A identificar",
+  /// para não presumir a tecnologia instalada.
+  static GeneratorType fromCode(String? code) => switch (code) {
+        'hf' => GeneratorType.highFrequency,
+        'mono2p' => GeneratorType.singlePhase2p,
+        'tri6p' => GeneratorType.threePhase6p,
+        'tri12p' => GeneratorType.threePhase12p,
+        _ => GeneratorType.unknown,
+      };
+
+  /// Faixas comerciais de referência (não são limites universais).
+  GeneratorLimits get referenceLimits => switch (this) {
+        GeneratorType.highFrequency => const GeneratorLimits(10, 1000, 1, 6300, 1000),
+        GeneratorType.unknown => const GeneratorLimits(
+            InstrumentRange.minMa, InstrumentRange.maxMa, InstrumentRange.minMs, InstrumentRange.maxMs,
+            InstrumentRange.maxMas),
+        _ => const GeneratorLimits(25, 800, 10, 10000, 500),
+      };
+
+  /// Estações de corrente (mA).
   List<double> get maSteps => switch (this) {
-        // Série R10 (Renard), usada pela maioria dos geradores de alta frequência.
-        GeneratorType.highFrequency => const <double>[
-            10, 12.5, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, //
-            200, 250, 320, 400, 500, 630, 800,
+        // Série R10 (Renard), comum em geradores de alta frequência.
+        GeneratorType.highFrequency || GeneratorType.unknown => const <double>[
+            1, 2, 5, 10, 12.5, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, //
+            200, 250, 320, 400, 500, 630, 800, 1000, 1250, 1500,
           ],
         // Estações comuns em comandos convencionais microprocessados.
-        GeneratorType.conventional => const <double>[
-            25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800,
-          ],
+        _ => const <double>[25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800],
       };
 
-  /// Estações de tempo (ms) típicas.
+  /// Estações de tempo (ms).
   List<double> get msSteps => switch (this) {
-        // Série R10 de 1 ms a 6,3 s.
-        GeneratorType.highFrequency => const <double>[
+        GeneratorType.highFrequency || GeneratorType.unknown => const <double>[
             1, 1.25, 1.6, 2, 2.5, 3.2, 4, 5, 6.3, 8, 10, 12.5, 16, 20, 25, 32, 40, 50, //
             63, 80, 100, 125, 160, 200, 250, 320, 400, 500, 630, 800, 1000, 1250, 1600,
-            2000, 2500, 3200, 4000, 5000, 6300,
+            2000, 2500, 3200, 4000, 5000, 6300, 8000, 10000,
           ],
-        // Convencional: mínimo de ~10 ms (rede de 60 Hz), até 5 s.
-        GeneratorType.conventional => const <double>[
+        _ => const <double>[
             10, 20, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500, //
-            600, 800, 1000, 1200, 1500, 2000, 2500, 3000, 4000, 5000,
+            600, 800, 1000, 1200, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000,
           ],
       };
+}
 
-  double get maxMa => maSteps.last;
-  double get maxMs => msSteps.last;
+/// Estações dentro dos limites do equipamento (sempre inclui os extremos).
+List<double> stepsWithin(List<double> steps, double min, double max) {
+  final inside = steps.where((v) => v >= min - 1e-9 && v <= max + 1e-9).toList();
+  if (inside.isEmpty || inside.first > min + 1e-9) inside.insert(0, min);
+  if (inside.last < max - 1e-9) inside.add(max);
+  return inside;
 }
 
 /// Próxima estação da tabela acima (up = true) ou abaixo do valor atual.

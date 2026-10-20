@@ -40,7 +40,7 @@ class EquipmentPage extends StatelessWidget {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
               side: BorderSide(
-                color: e.id == s.selected?.id ? XColors.blue : const Color(0xFFDDE3E9),
+                color: e.id == s.selected?.id ? XColors.blue : XColors.border,
                 width: e.id == s.selected?.id ? 2.5 : 1,
               ),
             ),
@@ -91,7 +91,7 @@ class EquipmentPage extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Card(
-              color: const Color(0xFFF7F8FA),
+              color: const Color(0xFF0A1A36),
               child: ListTile(
                 leading: const Icon(Icons.inventory_2_outlined, color: XColors.gray),
                 title: Text(e.title, style: const TextStyle(color: XColors.gray)),
@@ -127,7 +127,18 @@ class _EquipmentFormState extends State<EquipmentForm> {
   late final internalId = TextEditingController(text: widget.equipment?.internalId ?? '');
   late final technician = TextEditingController(text: widget.equipment?.technician ?? '');
   late DateTime? date = widget.equipment?.calibrationDate ?? DateTime.now();
-  late GeneratorType genType = widget.equipment?.generatorType ?? GeneratorType.highFrequency;
+  late GeneratorType genType = widget.equipment?.generatorType ?? GeneratorType.unknown;
+  late final genMaker = TextEditingController(text: widget.equipment?.generatorMaker ?? '');
+  late final genModel = TextEditingController(text: widget.equipment?.generatorModel ?? '');
+  late final power = TextEditingController(text: _n(widget.equipment?.powerKw));
+  late final minMa = TextEditingController(text: _n(widget.equipment?.minMa));
+  late final maxMa = TextEditingController(text: _n(widget.equipment?.maxMa));
+  late final minMs = TextEditingController(text: _n(widget.equipment?.minMs));
+  late final maxMs = TextEditingController(text: _n(widget.equipment?.maxMs));
+  late final maxMas = TextEditingController(text: _n(widget.equipment?.maxMas));
+
+  static String _n(double? v) => v == null ? '' : fmtTrim(v);
+  double? _num(TextEditingController c) => parseNum(c.text);
 
   String? _opt(TextEditingController c) => c.text.trim().isEmpty ? null : c.text.trim();
 
@@ -141,8 +152,20 @@ class _EquipmentFormState extends State<EquipmentForm> {
     if (picked != null) setState(() => date = picked);
   }
 
+  Future<void> _pickType() async {
+    final t = await Navigator.of(context).push<GeneratorType>(
+        MaterialPageRoute(builder: (_) => GeneratorTypePage(current: genType)));
+    if (t != null) setState(() => genType = t);
+  }
+
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    final lim = [_num(minMa), _num(maxMa), _num(minMs), _num(maxMs)];
+    if ((lim[0] != null && lim[1] != null && lim[0]! >= lim[1]!) ||
+        (lim[2] != null && lim[3] != null && lim[2]! >= lim[3]!)) {
+      showSnack(context, 'Limite mínimo deve ser menor que o máximo');
+      return;
+    }
     final old = widget.equipment;
     final now = DateTime.now();
     final e = Equipment(
@@ -156,6 +179,15 @@ class _EquipmentFormState extends State<EquipmentForm> {
       calibrationDate: date,
       technician: _opt(technician),
       generatorType: genType,
+      generatorMaker: _opt(genMaker),
+      generatorModel: _opt(genModel),
+      powerKw: _num(power),
+      minMa: _num(minMa),
+      maxMa: _num(maxMa),
+      minMs: _num(minMs),
+      maxMs: _num(maxMs),
+      maxMas: _num(maxMas),
+      photoPath: old?.photoPath,
       createdAt: old?.createdAt ?? now,
       updatedAt: now,
     );
@@ -196,9 +228,24 @@ class _EquipmentFormState extends State<EquipmentForm> {
             : null,
       );
 
+  Widget _numField(String label, TextEditingController c, String unit, {String? hint}) => TextFormField(
+        controller: c,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        style: const TextStyle(fontSize: 18),
+        decoration: InputDecoration(labelText: label, suffixText: unit, hintText: hint),
+        validator: (v) {
+          if (v == null || v.trim().isEmpty) return null;
+          final n = parseNum(v);
+          return (n == null || n <= 0) ? 'Valor inválido' : null;
+        },
+      );
+
   @override
   void dispose() {
-    for (final c in [client, site, manufacturer, model, serial, internalId, technician]) {
+    for (final c in [
+      client, site, manufacturer, model, serial, internalId, technician, //
+      genMaker, genModel, power, minMa, maxMa, minMs, maxMs, maxMas,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -221,8 +268,8 @@ class _EquipmentFormState extends State<EquipmentForm> {
           ResponsiveGrid(minTileWidth: 300, children: [
             _field('Cliente', client),
             _field('Estabelecimento', site),
-            _field('Fabricante', manufacturer, required: true),
-            _field('Modelo', model, required: true),
+            _field('Fabricante do aparelho', manufacturer, required: true),
+            _field('Modelo do aparelho', model, required: true),
             _field('Número de série (opcional)', serial,
                 hint: 'Deixe vazio se não informado', cap: TextCapitalization.characters),
             _field('Identificação interna', internalId, cap: TextCapitalization.characters),
@@ -236,26 +283,39 @@ class _EquipmentFormState extends State<EquipmentForm> {
               ),
             ),
           ]),
-          const SizedBox(height: 16),
-          const Text('Tipo de gerador',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: XColors.blueDark)),
-          const SizedBox(height: 8),
-          SegmentedButton<GeneratorType>(
-            showSelectedIcon: true,
-            segments: [
-              for (final t in GeneratorType.values)
-                ButtonSegment(value: t, label: Text(t.label, textAlign: TextAlign.center)),
-            ],
-            selected: {genType},
-            onSelectionChanged: (v) => setState(() => genType = v.first),
+          const SectionTitle('Gerador'),
+          Card(
+            child: ListTile(
+              onTap: _pickType,
+              leading: Icon(Icons.electric_bolt,
+                  color: genType == GeneratorType.unknown ? XColors.warn : XColors.cyan, size: 30),
+              title: Text(genType.label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+              subtitle: const Text('Tecnologia do gerador — toque para escolher'),
+              trailing: const Icon(Icons.chevron_right),
+            ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 12),
+          ResponsiveGrid(minTileWidth: 220, children: [
+            _field('Fabricante do gerador', genMaker),
+            _field('Modelo do gerador', genModel),
+            _numField('Potência nominal', power, 'kW'),
+          ]),
+          const SectionTitle('Limites do manual técnico'),
           Text(
-            'Define os valores das setas ▲▼ no SET '
-            '(mA até ${fmt(genType.maxMa, 0)} mA, tempo de ${fmt(genType.msSteps.first, genType.msSteps.first < 10 ? 1 : 0)} '
-            'a ${fmt(genType.maxMs, 0)} ms) e a tolerância usada.',
+            'Preencha conforme o manual do gerador. Em branco, vale a faixa de referência de '
+            '${genType.shortLabel}: ${fmtTrim(genType.referenceLimits.minMa)}–${fmtTrim(genType.referenceLimits.maxMa)} mA, '
+            '${fmtTrim(genType.referenceLimits.minMs)}–${fmtTrim(genType.referenceLimits.maxMs)} ms, '
+            'até ${fmtTrim(genType.referenceLimits.maxMas)} mAs. As setas ▲▼ do SET respeitam esses limites.',
             style: const TextStyle(color: XColors.gray),
           ),
+          const SizedBox(height: 10),
+          ResponsiveGrid(minTileWidth: 160, children: [
+            _numField('mA mínimo', minMa, 'mA', hint: fmtTrim(genType.referenceLimits.minMa)),
+            _numField('mA máximo', maxMa, 'mA', hint: fmtTrim(genType.referenceLimits.maxMa)),
+            _numField('Tempo mínimo', minMs, 'ms', hint: fmtTrim(genType.referenceLimits.minMs)),
+            _numField('Tempo máximo', maxMs, 'ms', hint: fmtTrim(genType.referenceLimits.maxMs)),
+            _numField('mAs máximo', maxMas, 'mAs', hint: fmtTrim(genType.referenceLimits.maxMas)),
+          ]),
           const SizedBox(height: 20),
           FilledButton.icon(
             onPressed: _save,
@@ -269,4 +329,71 @@ class _EquipmentFormState extends State<EquipmentForm> {
       ),
     );
   }
+}
+
+
+/// Seleção do tipo de gerador (tela 3).
+class GeneratorTypePage extends StatelessWidget {
+  final GeneratorType current;
+  const GeneratorTypePage({super.key, required this.current});
+
+  static String _desc(GeneratorType t) => switch (t) {
+        GeneratorType.highFrequency =>
+          'Inversor de alta frequência: corrente praticamente contínua, ondulação pequena.',
+        GeneratorType.singlePhase2p =>
+          'Rede monofásica retificada (2 pulsos por ciclo): corrente pulsante, vai a quase zero a cada semiciclo.',
+        GeneratorType.threePhase6p => 'Rede trifásica com 6 pulsos por ciclo: ondulação moderada.',
+        GeneratorType.threePhase12p => 'Rede trifásica com 12 pulsos por ciclo: ondulação baixa.',
+        GeneratorType.unknown =>
+          'Use quando a tecnologia instalada ainda não foi confirmada. Microprocessado não significa '
+              'necessariamente convencional — confira no manual ou na placa do gerador.',
+      };
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Tipo de gerador')),
+        body: PageBody(children: [
+          for (final t in GeneratorType.values)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(color: t == current ? XColors.blue : XColors.border, width: t == current ? 2 : 1),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () => Navigator.pop(context, t),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Icon(t == current ? Icons.radio_button_checked : Icons.radio_button_off,
+                          color: XColors.blue, size: 26),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(t.label, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 4),
+                          Text(_desc(t), style: const TextStyle(color: XColors.gray)),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Referência: ${fmtTrim(t.referenceLimits.minMa)}–${fmtTrim(t.referenceLimits.maxMa)} mA • '
+                            '${fmtTrim(t.referenceLimits.minMs)}–${fmtTrim(t.referenceLimits.maxMs)} ms • '
+                            'até ${fmtTrim(t.referenceLimits.maxMas)} mAs',
+                            style: const TextStyle(fontSize: 12, color: XColors.cyan),
+                          ),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          const Text(
+            'As faixas são referências comerciais de diferentes modelos, não limites universais. '
+            'Registre no cadastro os limites reais do manual técnico do gerador.',
+            style: TextStyle(color: XColors.gray),
+          ),
+        ]),
+      );
 }

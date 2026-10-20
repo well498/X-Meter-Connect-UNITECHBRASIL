@@ -30,12 +30,19 @@ class _SettingsPageState extends State<SettingsPage> {
   late final cAlert = TextEditingController(text: fmt(st.tolerancesConv.alertFraction * 100, 0));
   late bool autoReconnect = st.autoReconnect;
   late bool demoMode = st.demoMode;
+  late final detStart = TextEditingController(text: fmtTrim(st.detStartPct));
+  late final detEnd = TextEditingController(text: fmtTrim(st.detEndPct));
+  late final detMin = TextEditingController(text: fmtTrim(st.detMinMs));
+  late final cvLimit = TextEditingController(text: fmtTrim(st.cvLimitPct));
   bool showToken = false;
   String? error;
 
   @override
   void dispose() {
-    for (final c in [host, port, token, tolMa, tolMs, tolMas, alert, cTolMa, cTolMs, cTolMas, cAlert]) {
+    for (final c in [
+      host, port, token, tolMa, tolMs, tolMas, alert, cTolMa, cTolMs, cTolMas, cAlert, //
+      detStart, detEnd, detMin, cvLimit,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -59,6 +66,13 @@ class _SettingsPageState extends State<SettingsPage> {
     if (hf == null || conv == null) {
       err = 'Tolerâncias e início do alerta devem estar entre 0 e 100 %';
     }
+    final ds = parseNum(detStart.text), de = parseNum(detEnd.text), dm = parseNum(detMin.text);
+    final cv = parseNum(cvLimit.text);
+    if (ds == null || de == null || ds <= 0 || ds >= 100 || de <= 0 || de > ds) {
+      err = 'Limiares de detecção: início entre 1 e 99 % e fim (histerese) menor ou igual ao início';
+    }
+    if (dm == null || dm <= 0 || dm > 1000) err = 'Duração mínima da exposição inválida';
+    if (cv == null || cv <= 0 || cv > 100) err = 'Limite de CV inválido';
     setState(() => error = err);
     if (err != null) return false;
     await widget.state.saveSettings(widget.state.settings.copyWith(
@@ -69,6 +83,10 @@ class _SettingsPageState extends State<SettingsPage> {
       demoMode: demoMode,
       tolerances: hf,
       tolerancesConv: conv,
+      detStartPct: ds,
+      detEndPct: de,
+      detMinMs: dm,
+      cvLimitPct: cv,
     ));
     return true;
   }
@@ -208,7 +226,7 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Text('Instrumento: ${s.deviceId}${s.firmware != null ? ' • firmware ${s.firmware}' : ''}'),
         ),
       const SizedBox(height: 10),
-      const SectionTitle('Tolerâncias — alta frequência (±)'),
+      const SectionTitle('Tolerâncias — alta frequência e "a identificar" (±)'),
       ResponsiveGrid(minTileWidth: 200, children: [
         _num('Corrente (mA)', tolMa, '%'),
         _num('Tempo (ms)', tolMs, '%'),
@@ -216,7 +234,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _num('Alerta a partir de', alert, '% da tol.'),
       ]),
       const SizedBox(height: 10),
-      const SectionTitle('Tolerâncias — convencional microprocessado (±)'),
+      const SectionTitle('Tolerâncias — convencionais 2, 6 e 12 pulsos (±)'),
       ResponsiveGrid(minTileWidth: 200, children: [
         _num('Corrente (mA)', cTolMa, '%'),
         _num('Tempo (ms)', cTolMs, '%'),
@@ -227,6 +245,22 @@ class _SettingsPageState extends State<SettingsPage> {
       const Text(
         'Verde: dentro da faixa de alerta • Amarelo: entre o início do alerta e a tolerância • '
         'Vermelho: fora da tolerância. Ajuste conforme o procedimento e a norma aplicáveis.',
+        style: TextStyle(color: XColors.gray),
+      ),
+      const SizedBox(height: 10),
+      const SectionTitle('Detecção da exposição e repetibilidade'),
+      ResponsiveGrid(minTileWidth: 200, children: [
+        _num('Início / medição do tempo', detStart, '% do pico'),
+        _num('Fim (histerese)', detEnd, '% do pico'),
+        _num('Duração mínima', detMin, 'ms'),
+        _num('Limite do CV', cvLimit, '%'),
+      ]),
+      const SizedBox(height: 6),
+      const Text(
+        'O tempo é medido entre as passagens pelo limiar de início na subida e na descida. O limiar de fim, '
+        'menor, evita que ruído encerre a exposição. Pulsos mais curtos que a duração mínima são descartados. '
+        'Estes parâmetros valem para o modo demonstração e para a conferência das formas de onda; o firmware '
+        'usará os mesmos (docs/PROTOCOLO_PROPOSTO.md).',
         style: TextStyle(color: XColors.gray),
       ),
       const SizedBox(height: 10),

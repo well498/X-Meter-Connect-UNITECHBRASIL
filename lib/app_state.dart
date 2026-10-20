@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'analysis.dart';
 import 'calc.dart';
 import 'database.dart';
 import 'meter_api.dart';
@@ -71,6 +72,9 @@ class AppState extends ChangeNotifier {
 
   Reading? get latest => firstOrNull(sessionReadings);
 
+  /// Limites efetivos do equipamento selecionado.
+  GeneratorLimits get limits => selected?.limits ?? generatorType.referenceLimits;
+
   /// Avalia com a tolerância gravada na própria medição (rastreabilidade).
   Evaluation evalOf(Reading r) => evaluateReading(r, tol);
 
@@ -97,9 +101,11 @@ class AppState extends ChangeNotifier {
     if (selected != null) {
       session = await db.currentSession(selected!.id);
       readings = await db.readings(equipmentId: selected!.id);
+      notes = await db.notes(equipmentId: selected!.id);
     } else {
       session = null;
       readings = [];
+      notes = [];
     }
     _notify();
   }
@@ -151,8 +157,9 @@ class AppState extends ChangeNotifier {
     final s = session;
     if (s == null) return 'Selecione um equipamento';
     if (ma == null || ms == null) return 'Informe mA e tempo numéricos';
-    if (ma <= 0 || ma > 800) return 'mA SET deve estar entre 0 e 800 mA';
-    if (ms <= 0 || ms > 10000) return 'Tempo SET deve estar entre 0 e 10000 ms';
+    if (ma <= 0 || ms <= 0) return 'mA e tempo devem ser maiores que zero';
+    final limitError = selected?.limits.check(ma, ms);
+    if (limitError != null) return limitError;
     if (ma == s.setMa && ms == s.setMs) {
       _say('SET sem alteração');
       return null;
@@ -171,10 +178,11 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  Future<void> newSession() async {
+  Future<void> newSession({String? label}) async {
     final eq = selected;
     if (eq == null) return;
-    await db.newSession(eq.id);
+    await db.newSession(eq.id, label: label);
+    hiddenReadingUid = null;
     await reload();
     if (connected) await _guarded(_sendPendingSet);
     _say('Nova sessão de medição iniciada');
@@ -388,47 +396,160 @@ class AppState extends ChangeNotifier {
     return sqrt(-2 * log(u1)) * cos(2 * pi * u2);
   }
 
+  DetectionConfig get detection => DetectionConfig(
+        startFraction: settings.detStartPct / 100,
+        endFraction: settings.detEndPct / 100,
+        minDurationMs: settings.detMinMs,
+      );
+
+  /// Forma de onda sintética conforme a tecnologia do gerador, amostrada a
+  /// até 100 kS/s (MODO DEMONSTRAÇÃO). Devolve instantes (ms) e corrente (mA).
+  ({List<double> t, List<double> ma}) _synthWave(double setMa, double setMs, GeneratorType type) {
+    final realMa = max(0.5, setMa * (1 + 0.025 * _gauss()));
+    final realMs = max(0.5, setMs * (1 + 0.015 * _gauss()));
+    final pre = max(2.0, realMs * 0.12);
+    final total = pre * 2 + realMs;
+    final dt = max(0.01, total / 50000); // 100 kS/s, limitado a 50 mil amostras
+    final rise = switch (type) {
+      GeneratorType.highFrequency => max(0.3, min(1.5, realMs * 0.01)),
+      _ => max(0.8, min(3.0, realMs * 0.02)),
+    };
+    const mains = 60.0; // Hz
+    final t = <double>[];
+    final y = <double>[];
+    for (var tt = 0.0; tt <= total; tt += dt) {
+      final x = tt - pre;
+      double env;
+      if (x < 0 || x > realMs + rise) {
+        env = 0;
+      } else if (x < rise) {
+        env = x / rise;
+      } else if (x > realMs) {
+        env = 1 - (x - realMs) / rise;
+      } else {
+        env = 1;
+      }
+      final w = 2 * pi * mains * tt / 1000;
+      final shape = switch (type) {
+        // Monofásico 2 pulsos: retificação de onda completa (vai a ~0 a cada semiciclo).
+        GeneratorType.singlePhase2p => (sin(w)).abs() * pi / 2,
+        GeneratorType.threePhase6p => 1 + 0.06 * cos(6 * w),
+        GeneratorType.threePhase12p => 1 + 0.02 * cos(12 * w),
+        _ => 1 + 0.01 * sin(2 * pi * tt / 0.05), // HF: ondulação de ~20 kHz, pequena
+      };
+      t.add(tt);
+      y.add(max(0.0, realMa * env * shape + 0.003 * setMa * _gauss()));
+    }
+    return (t: t, ma: y);
+  }
+
   /// Gera um disparo SIMULADO, gravado com source='demo'. Só funciona com
   /// o modo demonstração ativo e nunca é apresentado como medição real.
+  /// mAs, tempo, corrente média e máxima saem do MESMO algoritmo do
+  /// firmware (lib/analysis.dart): detecção com histerese + trapézios.
   Future<void> generateDemoShot() async {
     final s = session;
     if (!settings.demoMode || s == null) return;
-    final readMs = max(1.0, s.setMs * (1 + 0.02 * _gauss()));
-    final plateau = max(1.0, s.setMa * (1 + 0.03 * _gauss()));
-    // Janela com 15 % de margem antes e depois da exposição.
-    const samples = 240;
-    final window = readMs * 1.3;
-    final periodUs = window * 1000 / samples;
-    final start = readMs * 0.15;
-    final rise = max(0.4, readMs * 0.03);
-    final values = <double>[];
-    var masAcc = 0.0;
-    for (var i = 0; i < samples; i++) {
-      final t = i * periodUs / 1000;
-      double v;
-      if (t < start || t > start + readMs) {
-        v = 0;
-      } else if (t < start + rise) {
-        v = plateau * (t - start) / rise;
-      } else if (t > start + readMs - rise) {
-        v = plateau * (start + readMs - t) / rise;
-      } else {
-        v = plateau * (1 + 0.015 * sin(t * 2 * pi / 3.33)) + 0.4 * _gauss();
-      }
-      v = max(0, v);
-      values.add(v);
-      masAcc += v * periodUs / 1e6;
+    final wave = _synthWave(s.setMa, s.setMs, generatorType);
+    final ex = detectExposure(wave.t, wave.ma, cfg: detection);
+    if (!ex.valid) {
+      _say('MODO DEMONSTRAÇÃO: exposição simulada rejeitada (${ex.flags.map((f) => f.label).join(', ')})');
+      return;
     }
+    // Guarda até 2.000 pontos para o gráfico (a medição usou todas as amostras).
+    final step = max(1, (wave.ma.length / 2000).ceil());
+    final stored = <double>[for (var i = 0; i < wave.ma.length; i += step) wave.ma[i]];
+    final periodUs = (wave.t[1] - wave.t[0]) * 1000 * step;
     await db.insertDemoReading(
       session: s,
-      readMa: plateau,
-      readMs: readMs,
-      readMas: masAcc,
-      waveform: Waveform(periodUs, values),
+      readMa: ex.meanMa,
+      readMs: ex.timeMs,
+      readMas: ex.mas,
+      waveform: Waveform(periodUs, stored),
       tol: tol,
+      maPeak: ex.peakMa,
+      quality: ex.flags.map((f) => f.code).toList(),
     );
+    hiddenReadingUid = null;
     await reload();
     _say('MODO DEMONSTRAÇÃO: disparo simulado gerado (não é medição real)');
+  }
+
+  /// "Iniciar Medição": arma o instrumento para registrar a PRÓXIMA exposição
+  /// feita pelo operador no comando do gerador. O app não dispara raios X.
+  Future<void> startMeasurement() async {
+    if (settings.demoMode) {
+      await generateDemoShot();
+      return;
+    }
+    final s = session;
+    final api = _api;
+    if (!connected || api == null || s == null) {
+      _say('Conecte-se ao instrumento para iniciar a medição (ou ative o modo demonstração)');
+      return;
+    }
+    await _guarded(() async {
+      await _sendPendingSet();
+      await api.arm(s.id);
+      _say('Instrumento pronto: faça a exposição no comando do gerador');
+    });
+  }
+
+  /// "Limpar": esconde o último resultado do painel até chegar uma nova
+  /// medição. Nada é apagado.
+  String? hiddenReadingUid;
+
+  void clearPanel() {
+    hiddenReadingUid = latest?.uid;
+    _say('Painel limpo. Aguardando nova medição.');
+  }
+
+  Reading? get displayed {
+    final r = latest;
+    return (r == null || r.uid == hiddenReadingUid) ? null : r;
+  }
+
+  // ---------------- Observações e foto ----------------
+
+  List<Note> notes = [];
+
+  Future<void> addNote(String text, {String? readingUid}) async {
+    final s = session;
+    if (s == null || text.trim().isEmpty) return;
+    await db.addNote(s.id, text, readingUid: readingUid);
+    await reload();
+    _say('Observação registrada');
+  }
+
+  Future<void> pickEquipmentPhoto(String equipmentId) async {
+    final res = await FilePicker.platform.pickFiles(type: FileType.image);
+    final src = res?.files.single.path;
+    if (src == null) return;
+    final dir = await getApplicationSupportDirectory();
+    final folder = Directory(p.join(dir.path, 'fotos'));
+    await folder.create(recursive: true);
+    final dest = p.join(folder.path, '${equipmentId}_${DateTime.now().millisecondsSinceEpoch}${p.extension(src)}');
+    await File(src).copy(dest);
+    await db.setPhoto(equipmentId, dest);
+    await reload();
+    _say('Foto do equipamento atualizada');
+  }
+
+  /// Exporta a forma de onda em CSV (tempo_ms;corrente_mA) para análise externa.
+  Future<String> exportWaveformCsv(Reading r) async {
+    final w = r.waveform;
+    if (w == null) throw StateError('Medição sem forma de onda');
+    final b = StringBuffer('tempo_ms;corrente_mA\n');
+    for (var i = 0; i < w.ma.length; i++) {
+      b.writeln('${fmt(i * w.samplePeriodUs / 1000, 3)};${fmt(w.ma[i], 3)}');
+    }
+    return saveExport('forma_onda_${r.shotId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}.csv', b.toString());
+  }
+
+  Future<String> saveExportBytes(String fileName, List<int> bytes) async {
+    final path = await saveExport(fileName, '', bom: false);
+    await File(path).writeAsBytes(bytes);
+    return path;
   }
 
   // ---------------- Exportação ----------------

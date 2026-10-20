@@ -31,61 +31,59 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('abre no celular com cadastro inicial e mAs 20,00', (tester) async {
+  testWidgets('celular: painel principal, setas ▲▼, abas e navegação', (tester) async {
     final state = await createState(tester);
-    await pumpAt(tester, state, const Size(412, 1600));
+    await pumpAt(tester, state, const Size(412, 2000));
 
-    expect(find.text('X-METER CONNECT'), findsWidgets);
+    expect(find.text('X-METER'), findsOneWidget);
+    expect(find.text('CONNECT'), findsOneWidget);
     expect(find.text('Siemens Multix B'), findsOneWidget);
+    expect(find.text('A identificar'), findsOneWidget, reason: 'gerador do cadastro inicial não é presumido');
+    expect(find.text('200'), findsOneWidget);
+    expect(find.text('100'), findsOneWidget);
     expect(find.text('20,00'), findsOneWidget);
-    expect(find.text('Desconectado'), findsWidgets);
+    expect(find.text('Iniciar Medição'), findsOneWidget);
     expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.textContaining('Nenhum valor READ'), findsOneWidget, reason: 'sem números inventados');
     expect(tester.takeException(), isNull);
 
-    // Tela SET: cálculo automático ao digitar.
-    await tester.tap(find.text('SET').last);
-    await tester.pump();
-    expect(find.text('20,00'), findsOneWidget);
-    // Setas: mA 200 → 250 (▲), tempo 100 → 80 (▼) na série de alta frequência.
+    // ▲ mA: 200 → 250 (25,00 mAs); ▼ tempo: 100 → 80 (20,00 mAs).
     await tester.tap(find.byTooltip('Aumentar mA'));
     await tester.pump();
+    expect(find.text('250'), findsOneWidget);
     expect(find.text('25,00'), findsOneWidget);
+    expect(find.text('Aplicar'), findsOneWidget, reason: 'SET alterado aguarda aplicação');
     await tester.tap(find.byTooltip('Diminuir tempo'));
     await tester.pump();
-    expect(find.text('20,00'), findsOneWidget, reason: '250 mA × 80 ms = 20,00 mAs');
-    await tester.enterText(find.byType(TextField).first, '100');
-    await tester.pump();
-    expect(find.text('8,00'), findsOneWidget);
+    expect(find.text('80'), findsOneWidget);
+    expect(find.text('20,00'), findsOneWidget);
 
-    // Painel READ sem instrumento não mostra números inventados.
-    await tester.tap(find.text('Medições'));
-    await tester.pump();
-    expect(find.textContaining('Nenhum valor READ'), findsOneWidget);
-    expect(tester.takeException(), isNull);
+    for (final tab in ['Gráfico', 'Histórico', 'Estatísticas', 'Medição']) {
+      await tester.tap(find.text(tab));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: tab);
+    }
+    for (final dest in ['Equipamentos', 'Relatórios', 'Configurações', 'Início']) {
+      await tester.tap(find.descendant(of: find.byType(NavigationBar), matching: find.text(dest)).first);
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: dest);
+    }
 
     state.dispose();
     await tester.runAsync(() => state.db.db.close());
   });
 
-  testWidgets('layout de tablet usa menu lateral com as 8 telas', (tester) async {
+  testWidgets('tablet: menu lateral e painel em largura maior', (tester) async {
     final state = await createState(tester);
-    await pumpAt(tester, state, const Size(1280, 800));
+    await pumpAt(tester, state, const Size(1280, 900));
 
     expect(find.byType(NavigationRail), findsOneWidget);
-    for (final label in [
-      'Início',
-      'Equipamentos',
-      'SET',
-      'Medições',
-      'Forma de onda',
-      'Histórico',
-      'Relatórios',
-      'Configurações'
-    ]) {
+    for (final label in ['Início', 'Equipamentos', 'Relatórios', 'Configurações']) {
       expect(find.text(label), findsWidgets, reason: label);
     }
-    for (final label in ['Forma de onda', 'Histórico', 'Relatórios', 'Configurações', 'Equipamentos']) {
-      await tester.tap(find.text(label).first);
+    expect(find.text('20,00'), findsOneWidget);
+    for (final label in ['Equipamentos', 'Relatórios', 'Configurações', 'Início']) {
+      await tester.tap(find.descendant(of: find.byType(NavigationRail), matching: find.text(label)).first);
       await tester.pump();
       expect(tester.takeException(), isNull, reason: label);
     }

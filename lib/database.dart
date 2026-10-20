@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import 'analysis.dart';
+
 import 'calc.dart';
 import 'models.dart';
 
@@ -43,11 +45,14 @@ class BackupException implements Exception {
 /// Versão 2 = cadastro completo, sessões, leituras com status e forma de onda.
 /// Versão 3 = tolerância gravada por medição, equipamentos arquivados,
 ///            registro de alterações e proteção das medições reais.
+/// Versão 4 = gerador (tecnologia, fabricante, modelo, potência, limites),
+///            foto, identificação da sessão, corrente máxima, indicadores de
+///            qualidade, sonda/calibração e observações do técnico.
 class XDatabase {
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   /// Tabelas na ordem segura para inserir (respeita as chaves estrangeiras).
-  static const tables = ['equipment', 'sessions', 'readings', 'sync_state', 'settings', 'audit_log'];
+  static const tables = ['equipment', 'sessions', 'readings', 'notes', 'sync_state', 'settings', 'audit_log'];
 
   final Database db;
   XDatabase(this.db);
@@ -62,10 +67,12 @@ class XDatabase {
         onCreate: (d, _) async {
           await _createV2(d);
           await _upgradeV2toV3(d);
+          await _upgradeV3toV4(d);
         },
         onUpgrade: (d, oldV, newV) async {
           if (oldV < 2) await _migrateV1toV2(d);
           if (oldV < 3) await _upgradeV2toV3(d);
+          if (oldV < 4) await _upgradeV3toV4(d);
         },
       ),
     );
@@ -179,6 +186,40 @@ class XDatabase {
     await _createProtection(d);
   }
 
+  /// V4: dados do gerador, limites do manual, foto, sessão, pico, qualidade,
+  /// sonda e observações.
+  static Future<void> _upgradeV3toV4(DatabaseExecutor d) async {
+    for (final c in [
+      'generator_maker TEXT',
+      'generator_model TEXT',
+      'power_kw REAL',
+      'min_ma REAL',
+      'max_ma REAL',
+      'min_ms REAL',
+      'max_ms REAL',
+      'max_mas REAL',
+      'photo_path TEXT',
+    ]) {
+      await d.execute('ALTER TABLE equipment ADD COLUMN $c');
+    }
+    await d.execute('ALTER TABLE sessions ADD COLUMN label TEXT');
+    for (final c in ['ma_peak REAL', 'quality TEXT', 'probe_id TEXT', 'cal_status TEXT']) {
+      await d.execute('ALTER TABLE readings ADD COLUMN $c');
+    }
+    await d.execute('''CREATE TABLE notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      reading_uid TEXT,
+      text TEXT NOT NULL,
+      at TEXT NOT NULL)''');
+    // Não presumir a tecnologia do gerador do cadastro inicial: se o técnico
+    // nunca a alterou, passa para "A identificar".
+    await d.execute('''UPDATE equipment SET generator_type = 'unknown'
+      WHERE id = '$seedEquipmentId' AND NOT EXISTS (
+        SELECT 1 FROM audit_log WHERE entity_id = '$seedEquipmentId' AND details LIKE '%generator_type%')''');
+    await _createProtection(d);
+  }
+
   /// Gatilhos do banco: medições reais e o registro de alterações não podem
   /// ser apagados nem modificados (só o backup completo as substitui).
   static Future<void> _createProtection(DatabaseExecutor d) async {
@@ -194,6 +235,15 @@ class XDatabase {
     await d.execute('''CREATE TRIGGER IF NOT EXISTS protect_audit_update
       BEFORE UPDATE ON audit_log
       BEGIN SELECT RAISE(ABORT, 'Registro de alteracoes nao pode ser alterado'); END''');
+    final hasNotes = (await d.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='notes'")).isNotEmpty;
+    if (hasNotes) {
+      await d.execute('''CREATE TRIGGER IF NOT EXISTS protect_notes_delete
+        BEFORE DELETE ON notes
+        BEGIN SELECT RAISE(ABORT, 'Observacao nao pode ser apagada'); END''');
+      await d.execute('''CREATE TRIGGER IF NOT EXISTS protect_notes_update
+        BEFORE UPDATE ON notes
+        BEGIN SELECT RAISE(ABORT, 'Observacao nao pode ser alterada'); END''');
+    }
   }
 
   static Future<void> _dropProtection(DatabaseExecutor d) async {
@@ -201,7 +251,9 @@ class XDatabase {
       'protect_readings_delete',
       'protect_readings_update',
       'protect_audit_delete',
-      'protect_audit_update'
+      'protect_audit_update',
+      'protect_notes_delete',
+      'protect_notes_update',
     ]) {
       await d.execute('DROP TRIGGER IF EXISTS $t');
     }
@@ -302,7 +354,8 @@ class XDatabase {
       if (prev.isNotEmpty) {
         final map = e.toMap()
           ..remove('created_at')
-          ..remove('archived');
+          ..remove('archived')
+          ..remove('photo_path');
         final changes = <String, Object?>{};
         for (final k in map.keys) {
           if (k == 'updated_at') continue;
@@ -418,7 +471,7 @@ class XDatabase {
   }
 
   /// Abre uma nova sessão copiando o SET da anterior.
-  Future<String> newSession(String equipmentId) async {
+  Future<String> newSession(String equipmentId, {String? label}) async {
     final prev = await currentSession(equipmentId);
     final id = newId('ses');
     await db.transaction((txn) async {
@@ -429,10 +482,43 @@ class XDatabase {
         'set_ms': prev?.setMs ?? seedSetMs,
         'set_pending': 1,
         'started_at': DateTime.now().toUtc().toIso8601String(),
+        'label': (label == null || label.trim().isEmpty) ? null : label.trim(),
       });
-      await _audit(txn, 'nova sessao', 'sessao', id, {'motivo': 'iniciada pelo técnico'});
+      await _audit(txn, 'nova sessao', 'sessao', id,
+          {'motivo': 'iniciada pelo técnico', if (label != null && label.trim().isNotEmpty) 'identificacao': label.trim()});
     });
     return id;
+  }
+
+  Future<void> setPhoto(String equipmentId, String? path) async {
+    await db.transaction((txn) async {
+      await txn.update('equipment', {'photo_path': path}, where: 'id = ?', whereArgs: [equipmentId]);
+      await _audit(txn, 'foto alterada', 'equipamento', equipmentId);
+    });
+  }
+
+  // ---------------- Observações ----------------
+
+  Future<void> addNote(String sessionId, String text, {String? readingUid}) async {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    await db.transaction((txn) async {
+      final id = await txn.insert('notes', {
+        'session_id': sessionId,
+        'reading_uid': readingUid,
+        'text': t,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await _audit(txn, 'observacao', 'sessao', sessionId, {'nota': id, if (readingUid != null) 'medicao': readingUid});
+    });
+  }
+
+  Future<List<Note>> notes({String? sessionId, String? equipmentId}) async {
+    final rows = await db.rawQuery(
+        'SELECT n.* FROM notes n JOIN sessions s ON s.id = n.session_id '
+        'WHERE (? IS NULL OR n.session_id = ?) AND (? IS NULL OR s.equipment_id = ?) ORDER BY n.id DESC',
+        [sessionId, sessionId, equipmentId, equipmentId]);
+    return rows.map(Note.fromMap).toList();
   }
 
   // ---------------- Leituras ----------------
@@ -520,7 +606,8 @@ class XDatabase {
         if (convTol != null) {
           final eq = await txn.query('equipment',
               columns: ['generator_type'], where: 'id = ?', whereArgs: [ses.single['equipment_id']]);
-          if (eq.isNotEmpty && eq.single['generator_type'] == GeneratorType.conventional.code) {
+          if (eq.isNotEmpty &&
+              GeneratorTypeInfo.fromCode(eq.single['generator_type']?.toString()).isConventional) {
             applied = convTol;
           }
         }
@@ -535,6 +622,17 @@ class XDatabase {
           continue;
         }
         final wf = Waveform.tryParse(r['waveform']);
+        final quality = <String>[
+          if (r['flags'] is List) ...(r['flags'] as List).map((e) => e.toString()),
+        ];
+        // Conferência independente: o app integra a forma de onda recebida
+        // (trapézios) e sinaliza divergência maior que 2 % no mAs.
+        if (wf != null) {
+          final ex = detectExposure(uniformTimes(wf.ma.length, wf.samplePeriodUs), wf.ma);
+          if (ex.valid && readMas > 0 && ((ex.mas - readMas).abs() / readMas) > 0.02) {
+            quality.add('verificacao_mas_divergente');
+          }
+        }
         await txn.insert('readings', {
           'uid': newId('rd'),
           'device_id': deviceId,
@@ -556,6 +654,10 @@ class XDatabase {
               DateTime.tryParse(r['recorded_at']?.toString() ?? '')?.toUtc().toIso8601String(),
           'received_at': DateTime.now().toUtc().toIso8601String(),
           ..._tolColumns(applied),
+          'ma_peak': val('ma_peak'),
+          'quality': quality.isEmpty ? null : jsonEncode(quality),
+          'probe_id': r['probe_id']?.toString(),
+          'cal_status': r['cal_status']?.toString(),
         });
         inserted++;
       }
@@ -585,6 +687,8 @@ class XDatabase {
     required double readMas,
     required Waveform waveform,
     required Tolerances tol,
+    double? maPeak,
+    List<String> quality = const [],
   }) async {
     final ev = evaluate(
         setMa: session.setMa,
@@ -615,6 +719,10 @@ class XDatabase {
       'recorded_at': now,
       'received_at': now,
       ..._tolColumns(tol),
+      'ma_peak': maPeak,
+      'quality': quality.isEmpty ? null : jsonEncode(quality),
+      'probe_id': 'DEMO',
+      'cal_status': 'simulado',
     };
     await db.insert('readings', map);
     return Reading.fromMap(map);
@@ -664,6 +772,7 @@ class XDatabase {
       throw const BackupException('Backup de versão mais nova do aplicativo. Atualize o app.');
     }
     if (schema < 3) throw const BackupException('Versão de backup não suportada');
+    // Backups da versão 3 não têm as colunas novas: ficam vazias.
     final tablesData = backup['tables'];
     if (tablesData is! Map) throw const BackupException('Backup sem dados');
     final counts = <String, int>{};

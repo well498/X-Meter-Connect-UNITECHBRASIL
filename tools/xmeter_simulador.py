@@ -49,6 +49,8 @@ STATE = {
     "set_ms": None,
     "readings": [],  # cada item tem "cursor"
     "next_shot": 1,
+    "armed": False,
+    "probe_id": "SIM-SONDA-01",
 }
 
 
@@ -84,20 +86,28 @@ def make_shot(error_pct=None, repeat=False):
         period_us = window * 1000.0 / samples
         start = read_ms * 0.15
         rise = max(0.4, read_ms * 0.03)
-        wave, mas = [], 0.0
+        # Rampas centradas nas bordas: a corrente cruza 50 % do pico exatamente
+        # no início e no fim do tempo de exposição (critério do protocolo).
+        wave, mas, prev = [], 0.0, None
         for i in range(samples):
             t = i * period_us / 1000.0
-            if t < start or t > start + read_ms:
+            x = t - start
+            if x < -rise / 2 or x > read_ms + rise / 2:
                 v = 0.0
-            elif t < start + rise:
-                v = read_ma * (t - start) / rise
-            elif t > start + read_ms - rise:
-                v = read_ma * (start + read_ms - t) / rise
+            elif x < rise / 2:
+                v = read_ma * (x + rise / 2) / rise
+            elif x > read_ms - rise / 2:
+                v = read_ma * (read_ms + rise / 2 - x) / rise
             else:
                 v = read_ma * (1 + 0.01 * math.sin(t * 2 * math.pi / 3.33)) + random.gauss(0, 0.3)
             v = max(0.0, v)
             wave.append(round(v, 2))
-            mas += v * period_us / 1e6
+            # Regra dos trapézios (mesma integração do firmware/app).
+            if prev is not None:
+                mas += (v + prev) / 2 * period_us / 1e6
+            prev = v
+        # Corrente média = mAs integrado / tempo (não o contrário).
+        read_ma = mas * 1000.0 / read_ms
         shot_id = "SIM-%05d" % STATE["next_shot"]
         STATE["next_shot"] += 1
         item = {
@@ -112,8 +122,13 @@ def make_shot(error_pct=None, repeat=False):
             "read_ms": round(read_ms, 2),
             "read_mas": round(mas, 3),
             "recorded_at": now_iso(),
+            "ma_peak": round(max(wave), 2),
+            "flags": [],
+            "probe_id": STATE["probe_id"],
+            "cal_status": "simulador (sem calibração)",
             "waveform": {"sample_period_us": round(period_us, 3), "ma": wave},
         }
+        STATE["armed"] = False
         STATE["readings"].append(item)
         set_mas = set_ma * set_ms / 1000.0
         print("> %s: %.1f mA, %.1f ms, %.3f mAs (SET %.2f mAs, erro %+.2f %%)"
@@ -152,7 +167,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {
                 "device_id": STATE["device_id"],
                 "protocol_version": PROTOCOL_VERSION,
-                "firmware": "simulador-1.0",
+                "firmware": "simulador-1.1",
+                "probe_id": STATE["probe_id"],
                 "simulated": True,
             })
         if url.path == "/v1/readings":
@@ -174,6 +190,23 @@ class Handler(BaseHTTPRequestHandler):
                 "items": items,
             })
         self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._guard():
+            return
+        if urlparse(self.path).path != "/v1/acquisition/arm":
+            return self._send(404, {"error": "not found"})
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            data = {}
+        with LOCK:
+            if STATE["session_id"] is None or data.get("session_id") != STATE["session_id"]:
+                return self._send(409, {"armed": False, "error": "SET da sessão não recebido"})
+            STATE["armed"] = True
+        print("> Instrumento ARMADO: aguardando exposição (digite d, a ou f para simular)")
+        self._send(200, {"armed": True, "session_id": data.get("session_id")})
 
     def do_PUT(self):
         if not self._guard():
