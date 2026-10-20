@@ -20,7 +20,7 @@ import 'screens/waveform_page.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
-const appVersion = '1.6.0';
+const appVersion = '1.7.0';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

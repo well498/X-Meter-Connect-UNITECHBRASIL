@@ -31,5 +31,48 @@ for src in overlay.rglob("*"):
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
+# ---- Assinatura do APK release (chave UNITECH via android/key.properties) ----
+gradle_kts = root / "android/app/build.gradle.kts"
+gradle_groovy = root / "android/app/build.gradle"
+if gradle_kts.exists():
+    g = gradle_kts.read_text(encoding="utf-8")
+    if "keystoreProperties" not in g:
+        g = "import java.io.FileInputStream\nimport java.util.Properties\n\n" + g
+        g = g.replace(
+            "android {",
+            "val keystoreProperties = Properties()\n"
+            "val keystorePropertiesFile = rootProject.file(\"key.properties\")\n"
+            "if (keystorePropertiesFile.exists()) {\n"
+            "    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n"
+            "}\n\n"
+            "android {",
+            1,
+        )
+        g = g.replace(
+            "    buildTypes {",
+            "    signingConfigs {\n"
+            "        create(\"release\") {\n"
+            "            if (keystorePropertiesFile.exists()) {\n"
+            "                keyAlias = keystoreProperties[\"keyAlias\"] as String\n"
+            "                keyPassword = keystoreProperties[\"keyPassword\"] as String\n"
+            "                storeFile = file(keystoreProperties[\"storeFile\"] as String)\n"
+            "                storePassword = keystoreProperties[\"storePassword\"] as String\n"
+            "            }\n"
+            "        }\n"
+            "    }\n\n"
+            "    buildTypes {",
+            1,
+        )
+        new_sign = ("signingConfig = if (keystorePropertiesFile.exists()) "
+                    "signingConfigs.getByName(\"release\") else signingConfigs.getByName(\"debug\")")
+        if 'signingConfig = signingConfigs.getByName("debug")' in g:
+            g = g.replace('signingConfig = signingConfigs.getByName("debug")', new_sign, 1)
+        else:
+            sys.exit("build.gradle.kts: bloco de assinatura release não encontrado")
+        gradle_kts.write_text(g, encoding="utf-8")
+    print("build.gradle.kts com assinatura release configurada")
+elif gradle_groovy.exists():
+    print("AVISO: build.gradle (Groovy) não suportado para assinatura automática")
+
 print("AndroidManifest.xml ajustado:")
 print(text)

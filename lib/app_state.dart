@@ -2,9 +2,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'calc.dart';
 import 'database.dart';
@@ -33,6 +37,7 @@ class AppState extends ChangeNotifier {
 
   AppSettings settings = const AppSettings();
   List<Equipment> equipments = [];
+  List<Equipment> archivedEquipments = [];
   Equipment? selected;
   MeasureSession? session;
   List<Reading> readings = [];
@@ -63,14 +68,8 @@ class AppState extends ChangeNotifier {
 
   Reading? get latest => firstOrNull(sessionReadings);
 
-  /// Reavalia o resultado com as tolerâncias configuradas no momento.
-  Evaluation evalOf(Reading r) => evaluate(
-      setMa: r.setMa,
-      setMs: r.setMs,
-      readMa: r.readMa,
-      readMs: r.readMs,
-      readMas: r.readMas,
-      tol: tol);
+  /// Avalia com a tolerância gravada na própria medição (rastreabilidade).
+  Evaluation evalOf(Reading r) => evaluateReading(r, tol);
 
   void _notify() {
     if (!_disposed) notifyListeners();
@@ -89,6 +88,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> reload() async {
     equipments = await db.equipments();
+    archivedEquipments = await db.equipments(archived: true);
     selected = firstOrNull(equipments.where((e) => e.id == settings.selectedEquipmentId)) ??
         firstOrNull(equipments);
     if (selected != null) {
@@ -120,8 +120,9 @@ class AppState extends ChangeNotifier {
     _say('Cadastro salvo: ${e.title}');
   }
 
-  Future<void> deleteEquipment(String id) async {
-    await db.deleteEquipment(id);
+  /// Arquiva (nunca apaga) o equipamento e todas as suas medições.
+  Future<void> archiveEquipment(String id) async {
+    await db.setArchived(id, true);
     if (settings.selectedEquipmentId == id) {
       final rest = equipments.where((e) => e.id != id);
       settings = AppSettings.fromMap({
@@ -131,7 +132,13 @@ class AppState extends ChangeNotifier {
       await db.saveSettings(settings);
     }
     await reload();
-    _say('Equipamento excluído');
+    _say('Equipamento arquivado. As medições continuam guardadas.');
+  }
+
+  Future<void> restoreEquipment(String id) async {
+    await db.setArchived(id, false);
+    await reload();
+    _say('Equipamento restaurado');
   }
 
   // ---------------- SET ----------------
@@ -143,12 +150,20 @@ class AppState extends ChangeNotifier {
     if (ma == null || ms == null) return 'Informe mA e tempo numéricos';
     if (ma <= 0 || ma > 2000) return 'mA SET deve estar entre 0 e 2000 mA';
     if (ms <= 0 || ms > 10000) return 'Tempo SET deve estar entre 0 e 10000 ms';
-    await db.updateSet(s.id, ma, ms);
+    if (ma == s.setMa && ms == s.setMs) {
+      _say('SET sem alteração');
+      return null;
+    }
+    final change = await db.changeSet(s.equipmentId, ma, ms);
     await reload();
+    final prefix = change.newSession
+        ? 'A sessão anterior já tinha medições e ficou travada. Nova sessão aberta com o novo SET. '
+        : '';
     if (connected) {
       await _guarded(_sendPendingSet);
+      if (change.newSession) _say('${prefix}SET enviado ao instrumento.');
     } else {
-      _say('SET salvo no aparelho. Será enviado ao instrumento quando conectar.');
+      _say('${prefix}SET salvo no aparelho. Será enviado ao instrumento quando conectar.');
     }
     return null;
   }
@@ -415,7 +430,57 @@ class AppState extends ChangeNotifier {
 
   // ---------------- Exportação ----------------
 
-  Future<String> saveExport(String fileName, String content) async {
+  /// Abre o menu de compartilhamento do Android (WhatsApp, e-mail, Drive…).
+  Future<void> shareFile(String path, String subject) async {
+    await SharePlus.instance.share(ShareParams(files: [XFile(path)], subject: subject, text: subject));
+  }
+
+  // ---------------- Backup ----------------
+
+  Future<String> _writeBackup(String prefix, String appVersion) async {
+    final data = await db.exportBackup(appVersion: appVersion);
+    final n = DateTime.now();
+    final name = '${prefix}_${n.year}${two(n.month)}${two(n.day)}_${two(n.hour)}${two(n.minute)}${two(n.second)}.json';
+    return saveExport(name, const JsonEncoder.withIndent(' ').convert(data), bom: false);
+  }
+
+  /// Gera o arquivo de backup completo e devolve o caminho.
+  Future<String> exportBackup(String appVersion) async {
+    final path = await _writeBackup('xmeter_backup', appVersion);
+    _say('Backup salvo: $path');
+    return path;
+  }
+
+  /// Restaura um backup. Antes, salva automaticamente uma cópia dos dados
+  /// atuais (xmeter_antes_restauracao_*.json) para poder desfazer.
+  Future<String> importBackupFile(String path, String appVersion) async {
+    Object? json;
+    try {
+      json = jsonDecode(await File(path).readAsString());
+    } catch (_) {
+      throw const BackupException('Não foi possível ler o arquivo. Escolha um backup .json do X-METER.');
+    }
+    if (json is! Map) throw const BackupException('Arquivo de backup inválido');
+    final safety = await _writeBackup('xmeter_antes_restauracao', appVersion);
+    disconnect();
+    final counts = await db.importBackup(Map<String, Object?>.from(json));
+    settings = await db.loadSettings();
+    await reload();
+    final msg = 'Backup restaurado: ${counts['equipment'] ?? 0} equipamento(s), '
+        '${counts['readings'] ?? 0} medição(ões). Cópia dos dados anteriores: $safety';
+    _say(msg);
+    return msg;
+  }
+
+  /// Abre o seletor de arquivos do Android para escolher o backup.
+  Future<String?> pickBackupFile() async {
+    final res = await FilePicker.platform.pickFiles(type: FileType.any);
+    return res?.files.single.path;
+  }
+
+  Future<List<AuditEntry>> auditLog() => db.auditLog();
+
+  Future<String> saveExport(String fileName, String content, {bool bom = true}) async {
     Directory? dir;
     if (Platform.isAndroid) {
       dir = await getExternalStorageDirectory();
@@ -425,7 +490,7 @@ class AppState extends ChangeNotifier {
     await folder.create(recursive: true);
     final file = File(p.join(folder.path, fileName));
     // BOM UTF-8 para o Excel abrir acentos corretamente.
-    await file.writeAsString('﻿$content');
+    await file.writeAsString(bom ? '\uFEFF$content' : content);
     return file.path;
   }
 

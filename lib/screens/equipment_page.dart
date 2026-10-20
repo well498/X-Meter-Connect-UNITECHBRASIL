@@ -82,6 +82,26 @@ class EquipmentPage extends StatelessWidget {
             ),
           ),
         ),
+      if (s.archivedEquipments.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        SectionTitle('Arquivados (${s.archivedEquipments.length})'),
+        for (final e in s.archivedEquipments)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Card(
+              color: const Color(0xFFF7F8FA),
+              child: ListTile(
+                leading: const Icon(Icons.inventory_2_outlined, color: XColors.gray),
+                title: Text(e.title, style: const TextStyle(color: XColors.gray)),
+                subtitle: Text('Série: ${e.serialLabel} • medições preservadas'),
+                trailing: TextButton(
+                  onPressed: () => s.restoreEquipment(e.id),
+                  child: const Text('Restaurar'),
+                ),
+              ),
+            ),
+          ),
+      ],
     ]);
   }
 }
@@ -139,29 +159,23 @@ class _EquipmentFormState extends State<EquipmentForm> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  Future<void> _delete() async {
+  Future<void> _archive() async {
     final e = widget.equipment;
     if (e == null) return;
-    final count = widget.state.readings.where((r) => r.equipmentId == e.id).length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Excluir equipamento?'),
-        content: Text('${e.title} e todas as suas sessões e medições serão apagados '
-            'deste aparelho${count > 0 ? ' (pelo menos $count medição(ões))' : ''}. '
-            'Esta ação não pode ser desfeita.'),
+        title: const Text('Arquivar equipamento?'),
+        content: Text('${e.title} sai da lista de equipamentos ativos. As sessões e '
+            'medições NÃO são apagadas e o equipamento pode ser restaurado a qualquer momento.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: XColors.fail),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Excluir'),
-          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Arquivar')),
         ],
       ),
     );
     if (ok == true) {
-      await widget.state.deleteEquipment(e.id);
+      await widget.state.archiveEquipment(e.id);
       if (mounted) Navigator.of(context).pop();
     }
   }
@@ -194,7 +208,7 @@ class _EquipmentFormState extends State<EquipmentForm> {
         title: Text(editing ? 'Editar equipamento' : 'Novo equipamento'),
         actions: [
           if (editing)
-            IconButton(tooltip: 'Excluir', onPressed: _delete, icon: const Icon(Icons.delete_outline)),
+            IconButton(tooltip: 'Arquivar', onPressed: _archive, icon: const Icon(Icons.archive_outlined)),
         ],
       ),
       body: Form(

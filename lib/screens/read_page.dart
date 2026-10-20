@@ -18,7 +18,7 @@ class ReadPage extends StatelessWidget {
     final ses = s.session;
     final r = s.latest;
     final ev = r == null ? null : s.evalOf(r);
-    final tol = s.tol;
+    final tol = r?.tolerances ?? s.tol;
 
     Color accentFor(double? err, double tolPct) =>
         XColors.status(classifyError(err, tolPct, tol.alertFraction));
@@ -116,7 +116,7 @@ class ReadPage extends StatelessWidget {
       ]),
       const SizedBox(height: 10),
       Text(
-        'Tolerâncias: mA ±${fmt(tol.maPct, 1)} % • tempo ±${fmt(tol.msPct, 1)} % • '
+        '${r == null ? 'Tolerâncias atuais' : 'Tolerâncias aplicadas a esta medição'}: mA ±${fmt(tol.maPct, 1)} % • tempo ±${fmt(tol.msPct, 1)} % • '
         'mAs ±${fmt(tol.masPct, 1)} % • alerta a partir de ${fmt(tol.alertFraction * 100, 0)} % da tolerância',
         style: const TextStyle(color: XColors.gray),
       ),

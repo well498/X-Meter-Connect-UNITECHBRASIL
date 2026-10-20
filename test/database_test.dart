@@ -71,7 +71,8 @@ void main() {
       createdAt: e.createdAt,
       updatedAt: DateTime.now(),
     ));
-    await db.updateSet(seedSessionId, 320, 6.3);
+    final ch = await db.changeSet(seedEquipmentId, 320, 6.3);
+    expect(ch.newSession, isFalse, reason: 'sessão sem medições é só atualizada');
     await db.saveSettings(const AppSettings(host: '192.168.4.1', token: 'abc', demoMode: true));
     await db.db.close();
 
@@ -219,6 +220,95 @@ void main() {
     expect(rs.single.equipmentId, seedEquipmentId);
     expect(await db.cursor('XM-1'), 7);
     expect(await db.equipments(), hasLength(1));
+    expect(rs.single.tolerances, isNotNull, reason: 'v3 grava tolerância nas medições antigas');
+    expect(rs.single.tolerances!.masPct, 10);
+    expect(eq.archived, isFalse);
+    await db.db.close();
+  });
+
+  test('tolerância fica gravada em cada medição', () async {
+    final db = await open();
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1', mas: 20.9)], const Tolerances(masPct: 10));
+    final r = (await db.readings()).single;
+    expect(r.tolerances!.masPct, 10);
+    // Mesmo com tolerância atual mais rígida (2 %), a medição mantém o resultado original.
+    expect(evaluateReading(r, const Tolerances(masPct: 2, maPct: 2, msPct: 2)).status,
+        MeasureStatus.approved);
+    expect(evaluate(setMa: 200, setMs: 100, readMa: 201, readMs: 100, readMas: 20.9,
+            tol: const Tolerances(masPct: 2, maPct: 2, msPct: 2)).status,
+        MeasureStatus.failed);
+    await db.db.close();
+  });
+
+  test('medições reais não podem ser apagadas nem alteradas', () async {
+    final db = await open();
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances());
+    await expectLater(db.db.delete('readings'), throwsA(anything));
+    await expectLater(db.db.update('readings', {'read_mas': 1.0}), throwsA(anything));
+    await expectLater(db.db.delete('audit_log'), throwsA(anything));
+    expect(await db.readings(), hasLength(1));
+    await db.db.close();
+  });
+
+  test('arquivar equipamento preserva medições e pode restaurar', () async {
+    final db = await open();
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances());
+    await db.setArchived(seedEquipmentId, true);
+    expect(await db.equipments(), isEmpty);
+    expect(await db.equipments(archived: true), hasLength(1));
+    expect(await db.readings(equipmentId: seedEquipmentId), hasLength(1));
+    await db.setArchived(seedEquipmentId, false);
+    expect(await db.equipments(), hasLength(1));
+    await db.db.close();
+  });
+
+  test('SET travado: sessão com medições abre nova sessão ao mudar SET', () async {
+    final db = await open();
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances());
+    final ch = await db.changeSet(seedEquipmentId, 100, 50);
+    expect(ch.newSession, isTrue);
+    expect(ch.sessionId, isNot(seedSessionId));
+    final old = (await db.session(seedSessionId))!;
+    expect(old.setMa, 200, reason: 'SET da sessão antiga não muda');
+    final cur = (await db.currentSession(seedEquipmentId))!;
+    expect(cur.id, ch.sessionId);
+    expect(cur.setMas, closeTo(5, 1e-9));
+    await db.db.close();
+  });
+
+  test('registro de alterações guarda as operações', () async {
+    final db = await open();
+    await db.changeSet(seedEquipmentId, 150, 80);
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances());
+    final log = await db.auditLog();
+    final actions = log.map((e) => e.action).toList();
+    expect(actions, containsAll(['criado', 'SET alterado', 'medicoes recebidas']));
+    await db.db.close();
+  });
+
+  test('backup exporta e restaura tudo, com medições protegidas', () async {
+    var db = await open();
+    await db.saveSettings(const AppSettings(token: 'segredo', demoMode: true));
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1'), shot('2')], const Tolerances());
+    final backup = await db.exportBackup(appVersion: 'teste');
+    final settingsRows = ((backup['tables'] as Map)['settings'] as List).cast<Map>();
+    expect(settingsRows.any((r) => r['key'] == 'token'), isFalse, reason: 'token não vai no backup');
+    await db.db.close();
+
+    // Outro aparelho (banco novo) recebe o backup.
+    path = p.join(tmp.path, 'outro.sqlite');
+    db = await open();
+    await db.saveSettings(const AppSettings(token: 'token-local'));
+    final counts = await db.importBackup(backup);
+    expect(counts['readings'], 2);
+    expect(await db.readings(), hasLength(2));
+    expect((await db.loadSettings()).demoMode, isTrue);
+    expect((await db.loadSettings()).token, 'token-local', reason: 'token local é mantido');
+    await expectLater(db.db.delete('readings'), throwsA(anything),
+        reason: 'proteção recriada após restaurar');
+    expect((await db.auditLog()).first.action, 'backup restaurado');
+    await expectLater(db.importBackup({'format': 'outro'}), throwsA(isA<BackupException>()));
+    expect(await db.readings(), hasLength(2), reason: 'backup inválido não altera nada');
     await db.db.close();
   });
 }

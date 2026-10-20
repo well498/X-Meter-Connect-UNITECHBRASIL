@@ -29,6 +29,7 @@ class Equipment {
   final String? internalId;
   final DateTime? calibrationDate;
   final String? technician;
+  final bool archived;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -42,6 +43,7 @@ class Equipment {
     this.internalId,
     this.calibrationDate,
     this.technician,
+    this.archived = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -59,6 +61,7 @@ class Equipment {
         'internal_id': internalId,
         'calibration_date': calibrationDate?.toIso8601String(),
         'technician': technician,
+        'archived': archived ? 1 : 0,
         'created_at': createdAt.toUtc().toIso8601String(),
         'updated_at': updatedAt.toUtc().toIso8601String(),
       };
@@ -73,6 +76,7 @@ class Equipment {
         internalId: _str(m['internal_id']),
         calibrationDate: DateTime.tryParse(m['calibration_date']?.toString() ?? ''),
         technician: _str(m['technician']),
+        archived: (m['archived'] as int? ?? 0) == 1,
         createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '') ?? DateTime.now(),
         updatedAt: DateTime.tryParse(m['updated_at']?.toString() ?? '') ?? DateTime.now(),
       );
@@ -169,6 +173,9 @@ class Reading {
   final DateTime? recordedAt;
   final DateTime receivedAt;
 
+  /// Tolerância vigente quando a medição foi gravada (rastreabilidade).
+  final Tolerances? tolerances;
+
   const Reading({
     required this.uid,
     required this.deviceId,
@@ -188,6 +195,7 @@ class Reading {
     required this.waveform,
     required this.recordedAt,
     required this.receivedAt,
+    this.tolerances,
   });
 
   /// Verdadeiro para QUALQUER dado não real (demonstração ou simulador).
@@ -222,6 +230,56 @@ class Reading {
       waveform: Waveform.tryParse(m['waveform']),
       recordedAt: DateTime.tryParse(m['recorded_at']?.toString() ?? ''),
       receivedAt: DateTime.tryParse(m['received_at']?.toString() ?? '') ?? DateTime.now(),
+      tolerances: m['tol_ma'] is num
+          ? Tolerances(
+              maPct: (m['tol_ma'] as num).toDouble(),
+              msPct: _dbl(m['tol_ms'], 10),
+              masPct: _dbl(m['tol_mas'], 10),
+              alertFraction: _dbl(m['alert_fraction'], 0.8),
+            )
+          : null,
+    );
+  }
+}
+
+/// Avalia a medição com a tolerância GRAVADA nela; [fallback] só é usado em
+/// registros sem tolerância gravada.
+Evaluation evaluateReading(Reading r, Tolerances fallback) => evaluate(
+      setMa: r.setMa,
+      setMs: r.setMs,
+      readMa: r.readMa,
+      readMs: r.readMs,
+      readMas: r.readMas,
+      tol: r.tolerances ?? fallback,
+    );
+
+/// Entrada do registro de alterações (somente leitura).
+class AuditEntry {
+  final int id;
+  final DateTime at;
+  final String action;
+  final String entity;
+  final String? entityId;
+  final Map<String, Object?> details;
+
+  const AuditEntry(this.id, this.at, this.action, this.entity, this.entityId, this.details);
+
+  factory AuditEntry.fromMap(Map<String, Object?> m) {
+    Map<String, Object?> details = const {};
+    final raw = m['details'];
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final d = jsonDecode(raw);
+        if (d is Map) details = Map<String, Object?>.from(d);
+      } catch (_) {}
+    }
+    return AuditEntry(
+      m['id'] as int,
+      DateTime.tryParse(m['at']?.toString() ?? '') ?? DateTime.now(),
+      m['action'].toString(),
+      m['entity'].toString(),
+      m['entity_id']?.toString(),
+      details,
     );
   }
 }

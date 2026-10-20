@@ -161,6 +161,20 @@ void main() {
     expect(await state.saveSet(null, 100), isNotNull);
   });
 
+  test('SET travado: com medições na sessão, novo SET abre nova sessão', () async {
+    await state.connect();
+    inst.addShot('1', 20.1);
+    await state.syncNow();
+    final first = state.session!.id;
+    expect(state.sessionReadings, hasLength(1));
+    expect(await state.saveSet(100, 50), isNull);
+    expect(state.session!.id, isNot(first));
+    expect(state.session!.setMa, 100);
+    expect(state.sessionReadings, isEmpty);
+    expect(state.readings, hasLength(1), reason: 'medição anterior preservada');
+    expect(inst.sessionId, state.session!.id, reason: 'instrumento recebeu a nova sessão');
+  });
+
   test('MODO DEMONSTRAÇÃO só gera dados quando ativo e sempre marcados', () async {
     await state.generateDemoShot();
     expect(state.readings, isEmpty);

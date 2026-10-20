@@ -57,7 +57,7 @@ jobs:
         run: flutter test --reporter expanded
 
       - name: flutter build apk --debug
-        run: flutter build apk --debug
+        run: flutter build apk --debug --build-number=$((GITHUB_RUN_NUMBER + 100))
 
       - name: Nomear APK
         id: apk
@@ -78,3 +78,61 @@ jobs:
             ${{ steps.apk.outputs.name }}.sha256
           retention-days: 30
           if-no-files-found: error
+
+      # ---------- APK RELEASE assinado com a chave UNITECH ----------
+      # Só roda quando os 4 segredos estão cadastrados no repositório
+      # (Settings → Secrets and variables → Actions).
+      - name: Preparar chave de assinatura
+        id: key
+        env:
+          KS_B64: ${{ secrets.XMETER_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.XMETER_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.XMETER_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.XMETER_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASS" ]; then
+            echo "::warning::Segredos da chave UNITECH não cadastrados: APK release não será gerado."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KS_B64" | base64 -d > android/app/xmeter-release.jks
+          {
+            echo "storeFile=xmeter-release.jks"
+            echo "storePassword=$KS_PASS"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > android/key.properties
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: flutter build apk --release
+        if: steps.key.outputs.ok == 'true'
+        run: flutter build apk --release --build-number=$((GITHUB_RUN_NUMBER + 100))
+
+      - name: Conferir assinatura e nomear APK release
+        if: steps.key.outputs.ok == 'true'
+        id: rel
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: *//; s/+.*//')
+          NAME="UNITECH_XMETER_CONNECT_v${VERSION}_release_${GITHUB_RUN_NUMBER}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "$NAME"
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$APKSIGNER" verify --print-certs "$NAME" | tee assinatura.txt
+          grep -q "CN=UNITECH BRASIL" assinatura.txt || { echo "::error::APK não assinado com a chave UNITECH"; exit 1; }
+          ls -lh "$NAME"
+          sha256sum "$NAME" | tee "$NAME.sha256"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar APK release
+        if: steps.key.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.rel.outputs.name }}
+          path: |
+            ${{ steps.rel.outputs.name }}
+            ${{ steps.rel.outputs.name }}.sha256
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Apagar chave do servidor
+        if: always()
+        run: rm -f android/app/xmeter-release.jks android/key.properties

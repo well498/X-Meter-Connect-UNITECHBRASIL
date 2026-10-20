@@ -36,12 +36,16 @@ class _ReportsPageState extends State<ReportsPage> {
     final base = 'xmeter_${eq.model.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')}_'
         '${stamp.year}${two(stamp.month)}${two(stamp.day)}_${two(stamp.hour)}${two(stamp.minute)}';
 
-    Future<void> export(String name, String content) async {
+    Future<void> export(String name, String content, {bool share = false}) async {
       try {
         final path = await s.saveExport(name, content);
         if (!mounted) return;
         setState(() => lastFile = path);
-        showSnack(this.context, 'Arquivo salvo: $path');
+        if (share) {
+          await s.shareFile(path, 'X-METER CONNECT — ${eq.title}');
+        } else {
+          showSnack(this.context, 'Arquivo salvo: $path');
+        }
       } catch (e) {
         if (mounted) showSnack(this.context, 'Falha ao salvar: $e');
       }
@@ -77,14 +81,14 @@ class _ReportsPageState extends State<ReportsPage> {
       const SizedBox(height: 14),
       Wrap(spacing: 10, runSpacing: 10, children: [
         FilledButton.icon(
-          onPressed: () => export('$base.csv', buildCsv(eq, list, s.tol)),
+          onPressed: () => export('$base.csv', buildCsv(eq, list, s.tol), share: true),
           icon: const Icon(Icons.table_view),
-          label: const Text('Exportar CSV (Excel)'),
+          label: const Text('Compartilhar CSV (Excel)'),
         ),
         FilledButton.icon(
-          onPressed: () => export('$base.txt', report),
-          icon: const Icon(Icons.description),
-          label: const Text('Salvar relatório'),
+          onPressed: () => export('$base.txt', report, share: true),
+          icon: const Icon(Icons.share),
+          label: const Text('Compartilhar relatório'),
         ),
         OutlinedButton.icon(
           onPressed: () => copy(report, 'Relatório'),

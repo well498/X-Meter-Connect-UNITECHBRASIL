@@ -8,22 +8,19 @@ String _csvCell(String v) {
   return v;
 }
 
+String _tolText(Tolerances t) =>
+    'mA ±${fmt(t.maPct, 1)}% ms ±${fmt(t.msPct, 1)}% mAs ±${fmt(t.masPct, 1)}% alerta ${fmt(t.alertFraction * 100, 0)}%';
+
 /// CSV no padrão brasileiro (separador ';' e vírgula decimal) para Excel.
 String buildCsv(Equipment eq, List<Reading> readings, Tolerances tol) {
   final b = StringBuffer();
   b.writeln([
     'id_medicao', 'origem', 'equipamento', 'serie', 'id_interno', 'sessao', 'instrumento',
     'disparo', 'data_hora', 'mA_SET', 'ms_SET', 'mAs_SET', 'mA_READ', 'ms_READ', 'mAs_READ',
-    'erro_mA_%', 'erro_ms_%', 'erro_mAs_%', 'status'
+    'erro_mA_%', 'erro_ms_%', 'erro_mAs_%', 'status', 'tolerancia_aplicada'
   ].join(';'));
   for (final r in readings) {
-    final ev = evaluate(
-        setMa: r.setMa,
-        setMs: r.setMs,
-        readMa: r.readMa,
-        readMs: r.readMs,
-        readMas: r.readMas,
-        tol: tol);
+    final ev = evaluateReading(r, tol);
     b.writeln([
       r.uid,
       r.sourceLabel,
@@ -44,6 +41,7 @@ String buildCsv(Equipment eq, List<Reading> readings, Tolerances tol) {
       fmt(ev.errMs),
       fmt(ev.errMas),
       r.isDemo ? 'SIMULADO' : ev.status.label,
+      _tolText(r.tolerances ?? tol),
     ].map(_csvCell).join(';'));
   }
   return b.toString();
@@ -63,13 +61,7 @@ Summary summarize(List<Reading> readings, Tolerances tol) {
   var a = 0, w = 0, f = 0;
   final errs = <double>[];
   for (final r in readings) {
-    final ev = evaluate(
-        setMa: r.setMa,
-        setMs: r.setMs,
-        readMa: r.readMa,
-        readMs: r.readMs,
-        readMas: r.readMas,
-        tol: tol);
+    final ev = evaluateReading(r, tol);
     switch (ev.status) {
       case MeasureStatus.approved:
         a++;
@@ -112,8 +104,9 @@ String buildTextReport(Equipment eq, MeasureSession? session, List<Reading> read
       ..writeln('');
   }
   b
-    ..writeln('TOLERÂNCIAS (±): mA ${fmt(tol.maPct, 1)} % | tempo ${fmt(tol.msPct, 1)} % | '
+    ..writeln('TOLERÂNCIAS ATUAIS (±): mA ${fmt(tol.maPct, 1)} % | tempo ${fmt(tol.msPct, 1)} % | '
         'mAs ${fmt(tol.masPct, 1)} % | alerta a partir de ${fmt(tol.alertFraction * 100, 0)} % da tolerância')
+    ..writeln('Cada medição é avaliada com a tolerância gravada no momento em que foi recebida.')
     ..writeln('')
     ..writeln('RESUMO: ${s.total} medição(ões) | aprovadas ${s.approved} | alerta ${s.alert} | '
         'reprovadas ${s.failed}')
@@ -128,13 +121,7 @@ String buildTextReport(Equipment eq, MeasureSession? session, List<Reading> read
   b.writeln('MEDIÇÕES');
   if (readings.isEmpty) b.writeln('Nenhuma medição registrada.');
   for (final r in readings) {
-    final ev = evaluate(
-        setMa: r.setMa,
-        setMs: r.setMs,
-        readMa: r.readMa,
-        readMs: r.readMs,
-        readMas: r.readMas,
-        tol: tol);
+    final ev = evaluateReading(r, tol);
     b.writeln('${fmtDateTime(r.when)} | ${r.isDemo ? '[${r.sourceLabel}] ' : ''}disparo ${r.shotId} | '
         'mA ${fmt(r.readMa)} (${fmtSigned(ev.errMa)} %) | ms ${fmt(r.readMs)} (${fmtSigned(ev.errMs)} %) | '
         'mAs ${fmt(r.readMas)} (${fmtSigned(ev.errMas)} %) | ${r.isDemo ? 'SIMULADO' : ev.status.label}');

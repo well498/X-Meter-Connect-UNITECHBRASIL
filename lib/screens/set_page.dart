@@ -90,6 +90,19 @@ class _SetPageState extends State<SetPage> {
       SectionTitle('SET — ${s.selected?.title ?? ''}'),
       const Text('Informe apenas a corrente e o tempo programados no gerador. '
           'O mAs é calculado automaticamente: mAs = mA × ms ÷ 1000.'),
+      if (s.sessionReadings.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Card(
+          color: const Color(0xFFFFF8E1),
+          child: ListTile(
+            leading: const Icon(Icons.lock_outline, color: XColors.warn),
+            title: const Text('SET desta sessão travado',
+                style: TextStyle(fontWeight: FontWeight.w800)),
+            subtitle: Text('A sessão já tem ${s.sessionReadings.length} medição(ões). '
+                'Ao salvar um SET diferente, uma nova sessão é aberta automaticamente.'),
+          ),
+        ),
+      ],
       const SizedBox(height: 14),
       ResponsiveGrid(minTileWidth: 260, children: [
         _input('Corrente programada', 'mA', ma),

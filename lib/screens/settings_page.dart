@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../calc.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'audit_page.dart';
 
 class SettingsPage extends StatefulWidget {
   final AppState state;
@@ -58,6 +59,49 @@ class _SettingsPageState extends State<SettingsPage> {
       tolerances: Tolerances(maPct: a!, msPct: b!, masPct: c!, alertFraction: f! / 100),
     ));
     return true;
+  }
+
+  Future<void> _exportBackup() async {
+    try {
+      final path = await widget.state.exportBackup(widget.version);
+      if (!mounted) return;
+      await widget.state.shareFile(path, 'Backup X-METER CONNECT');
+    } catch (e) {
+      if (mounted) showSnack(context, 'Falha no backup: $e');
+    }
+  }
+
+  Future<void> _restoreBackup() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restaurar backup?'),
+        content: const Text('TODOS os dados deste aparelho serão substituídos pelos do arquivo '
+            'escolhido. Antes disso, o app salva automaticamente uma cópia dos dados atuais '
+            'na pasta de exportações.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Escolher arquivo')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final path = await widget.state.pickBackupFile();
+      if (path == null) return;
+      final msg = await widget.state.importBackupFile(path, widget.version);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Backup restaurado'),
+          content: Text(msg),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        ),
+      );
+    } catch (e) {
+      if (mounted) showSnack(context, 'Backup não restaurado: $e');
+    }
   }
 
   Widget _num(String label, TextEditingController c, String suffix) => TextField(
@@ -188,6 +232,32 @@ class _SettingsPageState extends State<SettingsPage> {
         icon: const Icon(Icons.save),
         label: const Text('Salvar configurações'),
       ),
+      const SizedBox(height: 20),
+      const SectionTitle('Dados e backup'),
+      const Text(
+        'Os dados ficam só neste aparelho. Faça backup com frequência e guarde o arquivo '
+        'fora do celular (Google Drive, e-mail ou computador).',
+        style: TextStyle(color: XColors.gray),
+      ),
+      const SizedBox(height: 10),
+      Wrap(spacing: 10, runSpacing: 10, children: [
+        FilledButton.icon(
+          onPressed: _exportBackup,
+          icon: const Icon(Icons.backup_outlined),
+          label: const Text('Fazer backup e compartilhar'),
+        ),
+        OutlinedButton.icon(
+          onPressed: _restoreBackup,
+          icon: const Icon(Icons.settings_backup_restore),
+          label: const Text('Restaurar backup'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.of(context)
+              .push(MaterialPageRoute<void>(builder: (_) => AuditPage(state: s))),
+          icon: const Icon(Icons.history_edu),
+          label: const Text('Registro de alterações'),
+        ),
+      ]),
       const SizedBox(height: 20),
       const SectionTitle('Sobre'),
       Text('UNITECH X-METER CONNECT ${widget.version}\nBanco local: ${s.dbPath}',
