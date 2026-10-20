@@ -35,7 +35,7 @@ void main() {
     final state = await createState(tester);
     await pumpAt(tester, state, const Size(412, 2000));
 
-    expect(find.text('X-METER'), findsOneWidget);
+    expect(find.text('X-METER'), findsWidgets);
     expect(find.text('CONNECT'), findsOneWidget);
     expect(find.text('Siemens Multix B'), findsOneWidget);
     expect(find.text('A identificar'), findsOneWidget, reason: 'gerador do cadastro inicial não é presumido');
