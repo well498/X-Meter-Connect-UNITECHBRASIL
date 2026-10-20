@@ -127,7 +127,7 @@ void main() {
   test('itens inválidos ou de sessão desconhecida são rejeitados', () async {
     final db = await open();
     final m = await db.mergeDeviceReadings('XM-1', 5, [
-      {...shot('a'), 'quality': 'saturated'},
+      {...shot('a'), 'quality': 'incomplete'},
       {...shot('b'), 'read_mas': -1},
       {...shot('c'), 'read_ma': 'x'},
       shot('d', session: 'sessao-inexistente'),
@@ -482,7 +482,8 @@ void main() {
 
   test('v5: leitura fora da faixa é registrada sem truncar e marcada como inválida', () async {
     final db = await open();
-    await db.mergeDeviceReadings('XM-1', 2, [
+    await db.mergeDeviceReadings('XM-1', 3, [
+      {...shot('s', mas: 20), 'quality': 'saturated'},
       {...shot('x', mas: 2500), 'quality': 'out_of_range', 'read_ma': 1250.0, 'read_ms': 2000.0},
       {...shot('y', mas: 2100)},
     ], const Tolerances());
@@ -492,6 +493,7 @@ void main() {
     expect(rs['x']!.quality, contains('fora_da_faixa'));
     expect(rs['y']!.status, MeasureStatus.invalid, reason: 'acima de 2000 mAs mesmo sem a marca do firmware');
     expect(evaluateReading(rs['y']!, const Tolerances()).status, MeasureStatus.invalid);
+    expect(rs['s']!.status, MeasureStatus.invalid, reason: 'saturada é registrada, nunca aprovada');
     await db.db.close();
   });
 
