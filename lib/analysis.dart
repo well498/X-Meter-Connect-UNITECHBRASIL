@@ -349,8 +349,8 @@ WaveDiagnostics? diagnoseWave(List<double> tMs, List<double> ma,
   final startMs = tMs[i0];
   final endMs = startMs + ex.timeMs;
   // Partida: primeiros 10 % (mín. 1 amostra). Patamar: de 10 % a 95 %.
-  final iPlat0 = i0 + max(1, (n * 0.10).round());
-  final iPlat1 = max(iPlat0 + 1, i0 + (n * 0.95).round());
+  final int iPlat0 = (i0 + max(1, (n * 0.10).round())).toInt();
+  final int iPlat1 = max(iPlat0 + 1, i0 + (n * 0.95).round()).toInt();
   var ip = i0;
   for (var i = i0; i <= min(iPlat0, ma.length - 1); i++) {
     if (ma[i] > ma[ip]) ip = i;
