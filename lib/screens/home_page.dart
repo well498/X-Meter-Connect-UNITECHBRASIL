@@ -66,25 +66,26 @@ class _HomePageState extends State<HomePage> {
     if (eq == null) return;
     setState(() {
       if (isMa) {
-        _ma = stepValue(eq.maStations, ma, up: up);
+        _ma = stepValue(s.maStationsOf(eq), ma, up: up);
       } else {
-        _ms = stepValue(eq.msStations, ms, up: up);
+        _ms = stepValue(s.msStationsOf(eq), ms, up: up);
       }
     });
   }
 
   Future<void> _type(bool isMa) async {
-    final c = TextEditingController(text: fmtTrim(isMa ? ma : ms));
+    final sec = !isMa && s.settings.timeInSeconds;
+    final c = TextEditingController(text: fmtTrim(isMa ? ma : (sec ? ms / 1000 : ms)));
     final v = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(isMa ? 'Corrente programada (mA)' : 'Tempo programado (ms)'),
+        title: Text(isMa ? 'Corrente programada (mA)' : 'Tempo programado (${sec ? 's' : 'ms'})'),
         content: TextField(
           controller: c,
           autofocus: true,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
-          decoration: InputDecoration(suffixText: isMa ? 'mA' : 'ms'),
+          decoration: InputDecoration(suffixText: isMa ? 'mA' : (sec ? 's' : 'ms')),
           onSubmitted: (t) => Navigator.pop(ctx, parseNum(t)),
         ),
         actions: [
@@ -98,7 +99,7 @@ class _HomePageState extends State<HomePage> {
         if (isMa) {
           _ma = v;
         } else {
-          _ms = v;
+          _ms = sec ? v * 1000 : v;
         }
       });
     }
@@ -218,7 +219,7 @@ class _HomePageState extends State<HomePage> {
           const Spacer(),
           IconButton(
             tooltip: 'Configurações',
-            onPressed: () => widget.goTo(3),
+            onPressed: () => widget.goTo(4),
             icon: const Icon(Icons.settings_outlined, size: 28),
           ),
           PopupMenuButton<String>(
@@ -335,7 +336,9 @@ class _HomePageState extends State<HomePage> {
                           Text(s.deviceId ?? 'X-METER',
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
-                          Text(_linkShort(), style: TextStyle(color: link.color, fontSize: 13)),
+                          Text(
+                              '${_linkShort()}${s.deviceInfo?.batteryPct != null ? ' • ${fmt(s.deviceInfo!.batteryPct, 0)} %' : ''}',
+                              style: TextStyle(color: link.color, fontSize: 13)),
                         ]),
                   ),
                   Icon(Icons.chevron_right, color: link.color, size: 20),
@@ -415,7 +418,7 @@ class _HomePageState extends State<HomePage> {
                 Icon(isMa ? Icons.monitor_heart_outlined : Icons.schedule, color: XColors.cyan, size: 26),
                 const SizedBox(width: 8),
                 Flexible(
-                  child: Text(isMa ? 'Corrente (mA)' : 'Tempo (ms)',
+                  child: Text(isMa ? 'Corrente (mA)' : 'Tempo (${s.settings.timeInSeconds ? 's' : 'ms'})',
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 16, color: XColors.blueDark)),
                 ),
@@ -427,7 +430,7 @@ class _HomePageState extends State<HomePage> {
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
-                    child: Text(fmtTrim(value),
+                    child: Text(isMa || !s.settings.timeInSeconds ? fmtTrim(value) : fmtTrim(value / 1000),
                         style: const TextStyle(
                             fontSize: 46,
                             height: 1.1,
@@ -494,10 +497,19 @@ class _HomePageState extends State<HomePage> {
             ),
           ]),
           const SizedBox(height: 6),
+          Builder(builder: (context) {
+            final (lo, hi) = s.tol.masInterval(mas);
+            return Text(
+              'Aceitação: ${fmt(lo)} a ${fmt(hi)} mAs • ${s.tol.masRule}'
+              '${s.profile != null ? ' • perfil ${s.profile!.name}' : ''}',
+              style: const TextStyle(color: XColors.cyan, fontSize: 13, fontWeight: FontWeight.w600),
+            );
+          }),
+          const SizedBox(height: 2),
           Text(
             pending
                 ? 'SET alterado — toque em Aplicar (Iniciar Medição também aplica).'
-                : '${s.session?.setPending == true ? 'Pendente de envio ao instrumento' : 'Confirmado pelo instrumento'} • '
+                : '${s.session?.setOrigin == 'instrumento' ? 'SET definido no instrumento (modo local)' : s.session?.setPending == true ? 'Pendente de envio ao instrumento' : 'Confirmado pelo instrumento'} • '
                     'limites: ${fmtTrim(lim.minMa)}–${fmtTrim(lim.maxMa)} mA, '
                     '${fmtTrim(lim.minMs)}–${fmtTrim(lim.maxMs)} ms, até ${fmtTrim(lim.maxMas)} mAs',
             style: TextStyle(color: pending || over ? XColors.warn : XColors.gray, fontSize: 13),
@@ -505,6 +517,62 @@ class _HomePageState extends State<HomePage> {
         ]),
       ),
     );
+  }
+
+  /// Dados do teste: tubo e kV utilizado (kV é só METADADO informado).
+  Widget _testCard() {
+    final ses = s.session;
+    final eq = s.selected;
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.biotech_outlined, color: XColors.cyan),
+        title: Text(
+          'Tubo: ${ses?.tubeModel ?? eq?.tubeModel ?? 'não informado'} • kV do teste: ${ses?.kvInfo ?? '—'}',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: const Text('Toque para informar. O X-METER não mede kV: o valor é apenas registrado.'),
+        trailing: const Icon(Icons.edit_outlined),
+        onTap: ses == null ? null : _editTest,
+      ),
+    );
+  }
+
+  Future<void> _editTest() async {
+    final ses = s.session!;
+    final tubes = <String>{
+      ...?s.profile?.tubes,
+      if (s.selected?.tubeModel != null) s.selected!.tubeModel!,
+    }.toList();
+    final tube = TextEditingController(text: ses.tubeModel ?? s.selected?.tubeModel ?? '');
+    final kv = TextEditingController(text: ses.kvInfo ?? '');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Dados do teste'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TextField(controller: tube, decoration: const InputDecoration(labelText: 'Modelo do tubo')),
+            if (tubes.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final t in tubes) ActionChip(label: Text(t), onPressed: () => tube.text = t),
+              ]),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: kv,
+              decoration: const InputDecoration(
+                  labelText: 'kV utilizado no teste (metadado)', hintText: 'ex.: 70 kV ou 60–80 kV'),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Salvar')),
+        ],
+      ),
+    );
+    if (ok == true) await s.updateSessionMeta(tubeModel: tube.text, kvInfo: kv.text);
   }
 
   Widget _tabs() {
@@ -633,6 +701,8 @@ class _HomePageState extends State<HomePage> {
                     }),
                     const SizedBox(height: 12),
                     _masCard(),
+                    const SizedBox(height: 12),
+                    _testCard(),
                     const SizedBox(height: 12),
                     _tabs(),
                     const SizedBox(height: 12),

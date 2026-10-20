@@ -6,9 +6,25 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
-class EquipmentPage extends StatelessWidget {
+class EquipmentPage extends StatefulWidget {
   final AppState state;
   const EquipmentPage({super.key, required this.state});
+
+  @override
+  State<EquipmentPage> createState() => _EquipmentPageState();
+}
+
+class _EquipmentPageState extends State<EquipmentPage> {
+  String query = '';
+  AppState get state => widget.state;
+
+  bool _match(Equipment e) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return [e.title, e.client, e.site, e.serialNumber, e.internalId, e.technician, e.generatorModel, e.tubeModel]
+        .whereType<String>()
+        .any((x) => x.toLowerCase().contains(q));
+  }
 
   Future<void> _edit(BuildContext context, Equipment? e) async {
     await Navigator.of(context).push(MaterialPageRoute<void>(
@@ -26,6 +42,14 @@ class EquipmentPage extends StatelessWidget {
             icon: const Icon(Icons.add),
             label: const Text('Novo'),
           )),
+      TextField(
+        onChanged: (v) => setState(() => query = v),
+        decoration: const InputDecoration(
+          prefixIcon: Icon(Icons.search),
+          hintText: 'Pesquisar por cliente, estabelecimento, modelo, série, ID…',
+        ),
+      ),
+      const SizedBox(height: 12),
       if (s.equipments.isEmpty)
         const Card(
           child: Padding(
@@ -33,7 +57,7 @@ class EquipmentPage extends StatelessWidget {
             child: Text('Nenhum equipamento. Toque em "Novo" para cadastrar.'),
           ),
         ),
-      for (final e in s.equipments)
+      for (final e in s.equipments.where(_match))
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Card(
@@ -128,6 +152,10 @@ class _EquipmentFormState extends State<EquipmentForm> {
   late final technician = TextEditingController(text: widget.equipment?.technician ?? '');
   late DateTime? date = widget.equipment?.calibrationDate ?? DateTime.now();
   late GeneratorType genType = widget.equipment?.generatorType ?? GeneratorType.unknown;
+  late String? profileId = widget.equipment?.profileId;
+  late final tubeMaker = TextEditingController(text: widget.equipment?.tubeMaker ?? '');
+  late final tubeModel = TextEditingController(text: widget.equipment?.tubeModel ?? '');
+  late final notes = TextEditingController(text: widget.equipment?.notes ?? '');
   late final genMaker = TextEditingController(text: widget.equipment?.generatorMaker ?? '');
   late final genModel = TextEditingController(text: widget.equipment?.generatorModel ?? '');
   late final power = TextEditingController(text: _n(widget.equipment?.powerKw));
@@ -149,7 +177,13 @@ class _EquipmentFormState extends State<EquipmentForm> {
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
-    if (picked != null) setState(() => date = picked);
+    if (picked == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(date ?? DateTime.now()),
+    );
+    final t = time ?? TimeOfDay.fromDateTime(date ?? DateTime.now());
+    setState(() => date = DateTime(picked.year, picked.month, picked.day, t.hour, t.minute));
   }
 
   Future<void> _pickType() async {
@@ -188,6 +222,10 @@ class _EquipmentFormState extends State<EquipmentForm> {
       maxMs: _num(maxMs),
       maxMas: _num(maxMas),
       photoPath: old?.photoPath,
+      profileId: profileId,
+      tubeMaker: _opt(tubeMaker),
+      tubeModel: _opt(tubeModel),
+      notes: _opt(notes),
       createdAt: old?.createdAt ?? now,
       updatedAt: now,
     );
@@ -244,7 +282,7 @@ class _EquipmentFormState extends State<EquipmentForm> {
   void dispose() {
     for (final c in [
       client, site, manufacturer, model, serial, internalId, technician, //
-      genMaker, genModel, power, minMa, maxMa, minMs, maxMs, maxMas,
+      genMaker, genModel, power, minMa, maxMa, minMs, maxMs, maxMas, tubeMaker, tubeModel, notes,
     ]) {
       c.dispose();
     }
@@ -278,8 +316,8 @@ class _EquipmentFormState extends State<EquipmentForm> {
               onTap: _pickDate,
               child: InputDecorator(
                 decoration: const InputDecoration(
-                    labelText: 'Data da aferição', suffixIcon: Icon(Icons.calendar_month)),
-                child: Text(fmtDate(date), style: const TextStyle(fontSize: 18)),
+                    labelText: 'Data e horário da aferição', suffixIcon: Icon(Icons.calendar_month)),
+                child: Text(fmtDateTime(date), style: const TextStyle(fontSize: 18)),
               ),
             ),
           ]),
@@ -294,12 +332,75 @@ class _EquipmentFormState extends State<EquipmentForm> {
               trailing: const Icon(Icons.chevron_right),
             ),
           ),
+          const SizedBox(height: 10),
+          Builder(builder: (context) {
+            final options = widget.state.profiles
+                .where((p) => p.id == profileId || p.type == genType || p.id.startsWith('perfil-generico') == false)
+                .toList();
+            final current = options.any((p) => p.id == profileId) ? profileId : null;
+            return InputDecorator(
+              decoration: const InputDecoration(labelText: 'Perfil do gerador (faixas e critério de aceitação)'),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String?>(
+                  value: current,
+                  isExpanded: true,
+                  items: [
+                    DropdownMenuItem<String?>(
+                        value: null, child: Text('Genérico do tipo — ${genType.shortLabel}')),
+                    for (final p in options.where((p) => !p.id.startsWith('perfil-generico')))
+                      DropdownMenuItem<String?>(value: p.id, child: Text(p.name, overflow: TextOverflow.ellipsis)),
+                  ],
+                  onChanged: (v) => setState(() {
+                    profileId = v;
+                    final p = firstOrNull(widget.state.profiles.where((x) => x.id == v));
+                    if (p != null) {
+                      genType = p.type;
+                      if (genMaker.text.isEmpty && p.maker != null) genMaker.text = p.maker!;
+                      if (genModel.text.isEmpty && p.model != null) genModel.text = p.model!;
+                      if (power.text.isEmpty && p.powerKw != null) power.text = fmtTrim(p.powerKw!);
+                    }
+                  }),
+                ),
+              ),
+            );
+          }),
           const SizedBox(height: 12),
           ResponsiveGrid(minTileWidth: 220, children: [
             _field('Fabricante do gerador', genMaker),
             _field('Modelo do gerador', genModel),
             _numField('Potência nominal', power, 'kW'),
           ]),
+          const SectionTitle('Tubo de raios X'),
+          ResponsiveGrid(minTileWidth: 220, children: [
+            _field('Fabricante do tubo', tubeMaker),
+            _field('Modelo do tubo', tubeModel, cap: TextCapitalization.characters),
+          ]),
+          Builder(builder: (context) {
+            final p = firstOrNull(widget.state.profiles.where((x) => x.id == profileId));
+            if (p == null || p.tubes.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(spacing: 6, runSpacing: 6, children: [
+                for (final t in p.tubes)
+                  ActionChip(
+                    label: Text(t),
+                    onPressed: () => setState(() {
+                      final parts = t.split(' ');
+                      tubeMaker.text = parts.first;
+                      tubeModel.text = parts.skip(1).join(' ');
+                    }),
+                  ),
+              ]),
+            );
+          }),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: notes,
+            minLines: 2,
+            maxLines: 5,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(labelText: 'Observações do equipamento'),
+          ),
           const SectionTitle('Limites do manual técnico'),
           Text(
             'Preencha conforme o manual do gerador. Em branco, vale a faixa de referência de '

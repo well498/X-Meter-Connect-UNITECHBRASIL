@@ -52,6 +52,8 @@ class _ReportsPageState extends State<ReportsPage> {
           tol: s.tol,
           includesSimulated: list.any((r) => r.isDemo),
           appVersion: widget.version,
+          profile: s.profile,
+          limits: s.limits,
           logoPng: logo,
         );
         final path = await s.saveExportBytes('$base.pdf', bytes);

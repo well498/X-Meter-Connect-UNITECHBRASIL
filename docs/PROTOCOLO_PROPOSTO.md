@@ -1,4 +1,4 @@
-# Protocolo X-METER ↔ aplicativo — PROPOSTA v1.1
+# Protocolo X-METER ↔ aplicativo — PROPOSTA v1.2
 
 > **Status: proposta.** Nada disto existe no firmware ainda. Os endpoints abaixo são o
 > contrato que o aplicativo já implementa e que o ESP32-S3 deverá implementar.
@@ -128,6 +128,57 @@ Resposta `409` se o SET da sessão ainda não foi recebido.
 
 Taxa-alvo de aquisição: 100 000 amostras/s. Para o aplicativo, o instrumento pode enviar a
 forma de onda reduzida (ex.: até 2 000 pontos), mas os valores READ devem vir da aquisição completa.
+
+## Acréscimos da v1.2 — modo local, bateria e estado
+
+O instrumento tem display TFT de ~2,8", botões, bateria recarregável por USB-C e funciona
+sozinho (MODO LOCAL). O STM32 faz os cálculos; o ESP32-S3 só comunica.
+
+### `GET /v1/device` (campos adicionais)
+
+```json
+{
+  "device_id": "XMETER-0001", "protocol_version": 1, "firmware": "0.3.0",
+  "model": "UNITECH X-METER", "probe_id": "SONDA-07",
+  "battery": { "percent": 82, "charging": false },
+  "mode": "local",
+  "transport": "wifi",
+  "calibration": { "status": "valida", "due": "2027-10" },
+  "alerts": ["bateria fraca"]
+}
+```
+`mode`: `local` (SET configurado no display) ou `connected` (configurado pelo aplicativo).
+`alerts`: erros e alertas a exibir (bateria fraca, sonda ausente, calibração vencida, memória cheia…).
+
+### `GET /v1/session/set` — SET atual e origem da última alteração
+
+```json
+{ "session_id": "local-0042", "set_ma": 100, "set_ms": 50, "set_mas": 5.0,
+  "origin": "instrumento", "changed_at": "2026-10-20T16:40:00Z" }
+```
+- `origin`: `app` (último SET veio do aplicativo) ou `instrumento` (display/botões).
+- Se `origin = instrumento` e `changed_at` for mais recente que o SET do aplicativo, o app ADOTA esse
+  SET (nova sessão com o `session_id` do instrumento) e registra a origem. Caso contrário, o app envia
+  o seu SET pendente (`PUT /v1/session/set`), que passa a ter `origin = app`.
+- Firmwares sem este recurso respondem 404; o aplicativo ignora.
+
+### Medições do modo local
+
+Disparos feitos sem o aplicativo ficam na memória e entram por `/v1/readings` com o `session_id`
+local. Se a sessão não existir no aplicativo, ela é criada no equipamento selecionado, com o SET do
+item e origem `instrumento`. Deduplicação continua por `(device_id, shot_id)`.
+
+### Valores fora da faixa
+
+O firmware deve enviar a medição com `quality: "out_of_range"` (ou `"saturated"`) e os valores
+REAIS calculados — nunca truncados. O aplicativo registra como **INVÁLIDA**. O aplicativo também
+marca como inválida qualquer leitura acima de 1.500 mA, 10.000 ms ou 2.000 mAs, ou abaixo de
+0,01 mAs, mesmo sem a marca do firmware.
+
+### Critério de aceitação
+
+Não é enviado ao instrumento: fica no **perfil de gerador** do aplicativo, com origem e versão, e é
+gravado em cada medição (`tol_*`, `tol_mas_abs`, `tol_origin`, `profile_id`).
 
 ## Transporte 2 — Bluetooth Low Energy (futuro, NÃO implementado)
 

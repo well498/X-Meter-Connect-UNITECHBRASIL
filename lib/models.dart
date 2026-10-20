@@ -47,6 +47,16 @@ class Equipment {
   final double? maxMs;
   final double? maxMas;
 
+  /// Perfil de gerador (faixas, estações e critério de aceitação).
+  final String? profileId;
+
+  /// Tubo de raios X instalado.
+  final String? tubeMaker;
+  final String? tubeModel;
+
+  /// Observações gerais do equipamento.
+  final String? notes;
+
   /// Foto do equipamento (arquivo no aparelho).
   final String? photoPath;
   final bool archived;
@@ -72,6 +82,10 @@ class Equipment {
     this.minMs,
     this.maxMs,
     this.maxMas,
+    this.profileId,
+    this.tubeMaker,
+    this.tubeModel,
+    this.notes,
     this.photoPath,
     this.archived = false,
     required this.createdAt,
@@ -114,6 +128,10 @@ class Equipment {
         'min_ms': minMs,
         'max_ms': maxMs,
         'max_mas': maxMas,
+        'profile_id': profileId,
+        'tube_maker': tubeMaker,
+        'tube_model': tubeModel,
+        'notes': notes,
         'photo_path': photoPath,
         'archived': archived ? 1 : 0,
         'created_at': createdAt.toUtc().toIso8601String(),
@@ -139,6 +157,10 @@ class Equipment {
         minMs: _optDbl(m['min_ms']),
         maxMs: _optDbl(m['max_ms']),
         maxMas: _optDbl(m['max_mas']),
+        profileId: _str(m['profile_id']),
+        tubeMaker: _str(m['tube_maker']),
+        tubeModel: _str(m['tube_model']),
+        notes: _str(m['notes']),
         photoPath: _str(m['photo_path']),
         archived: (m['archived'] as int? ?? 0) == 1,
         createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '') ?? DateTime.now(),
@@ -165,6 +187,14 @@ class MeasureSession {
   /// Identificação da sessão dada pelo técnico (opcional).
   final String? label;
 
+  /// Origem da última alteração do SET: 'app' ou 'instrumento'.
+  final String setOrigin;
+  final DateTime? setChangedAt;
+
+  /// Metadados do teste informados pelo técnico (o X-METER não mede kV).
+  final String? tubeModel;
+  final String? kvInfo;
+
   const MeasureSession({
     required this.id,
     required this.equipmentId,
@@ -175,6 +205,10 @@ class MeasureSession {
     this.deviceId,
     required this.startedAt,
     this.label,
+    this.setOrigin = 'app',
+    this.setChangedAt,
+    this.tubeModel,
+    this.kvInfo,
   });
 
   double get setMas => masFrom(setMa, setMs);
@@ -189,6 +223,10 @@ class MeasureSession {
         deviceId: _str(m['device_id']),
         startedAt: DateTime.tryParse(m['started_at']?.toString() ?? '') ?? DateTime.now(),
         label: _str(m['label']),
+        setOrigin: _str(m['set_origin']) ?? 'app',
+        setChangedAt: DateTime.tryParse(m['set_changed_at']?.toString() ?? ''),
+        tubeModel: _str(m['tube_model']),
+        kvInfo: _str(m['kv_info']),
       );
 }
 
@@ -261,6 +299,13 @@ class Reading {
   final String? probeId;
   final String? calStatus;
 
+  /// Perfil de gerador usado na avaliação.
+  final String? profileId;
+
+  /// Indicadores que tornam a medição INVÁLIDA (nunca aprovada).
+  static const invalidFlags = {'fora_da_faixa', 'saturated', 'noExposure', 'tooShort'};
+  bool get isInvalid => status == MeasureStatus.invalid || quality.any(invalidFlags.contains);
+
   const Reading({
     required this.uid,
     required this.deviceId,
@@ -285,6 +330,7 @@ class Reading {
     this.quality = const [],
     this.probeId,
     this.calStatus,
+    this.profileId,
   });
 
   /// Verdadeiro para QUALQUER dado não real (demonstração ou simulador).
@@ -324,9 +370,12 @@ class Reading {
               maPct: (m['tol_ma'] as num).toDouble(),
               msPct: _dbl(m['tol_ms'], 10),
               masPct: _dbl(m['tol_mas'], 10),
+              masAbs: _dbl(m['tol_mas_abs'], 0),
               alertFraction: _dbl(m['alert_fraction'], 0.8),
+              origin: _str(m['tol_origin']),
             )
           : null,
+      profileId: _str(m['profile_id']),
       maPeak: opt(m['ma_peak']),
       quality: _strList(m['quality']),
       probeId: _str(m['probe_id']),
@@ -366,14 +415,198 @@ class Note {
 
 /// Avalia a medição com a tolerância GRAVADA nela; [fallback] só é usado em
 /// registros sem tolerância gravada.
-Evaluation evaluateReading(Reading r, Tolerances fallback) => evaluate(
-      setMa: r.setMa,
-      setMs: r.setMs,
-      readMa: r.readMa,
-      readMs: r.readMs,
-      readMas: r.readMas,
-      tol: r.tolerances ?? fallback,
+Evaluation evaluateReading(Reading r, Tolerances fallback) {
+  final ev = evaluate(
+    setMa: r.setMa,
+    setMs: r.setMs,
+    readMa: r.readMa,
+    readMs: r.readMs,
+    readMas: r.readMas,
+    tol: r.tolerances ?? fallback,
+  );
+  return r.isInvalid ? Evaluation(ev.errMa, ev.errMs, ev.errMas, MeasureStatus.invalid) : ev;
+}
+
+/// Perfil de gerador: faixas, estações de mA/tempo, tubos e critério de
+/// aceitação com origem e versão. Perfis "builtin" vêm com o aplicativo.
+class GeneratorProfile {
+  final String id;
+  final String name;
+  final String? maker;
+  final String? model;
+  final GeneratorType type;
+  final double? powerKw;
+  final double? inverterKhz;
+
+  /// Estações de corrente específicas (null = tabela do tipo).
+  final List<double>? maStations;
+  final double? minMa;
+  final double? maxMa;
+  final double? minMs;
+  final double? maxMs;
+  final double? minMas;
+  final double? maxMas;
+  final Tolerances tolerances;
+  final List<String> tubes;
+  final bool builtin;
+  final String? notes;
+
+  const GeneratorProfile({
+    required this.id,
+    required this.name,
+    this.maker,
+    this.model,
+    required this.type,
+    this.powerKw,
+    this.inverterKhz,
+    this.maStations,
+    this.minMa,
+    this.maxMa,
+    this.minMs,
+    this.maxMs,
+    this.minMas,
+    this.maxMas,
+    required this.tolerances,
+    this.tubes = const [],
+    this.builtin = false,
+    this.notes,
+  });
+
+  GeneratorLimits get limits {
+    final r = type.referenceLimits;
+    final st = maStations;
+    return GeneratorLimits(
+      minMa ?? (st != null && st.isNotEmpty ? st.first : r.minMa),
+      maxMa ?? (st != null && st.isNotEmpty ? st.last : r.maxMa),
+      minMs ?? r.minMs,
+      maxMs ?? r.maxMs,
+      maxMas ?? r.maxMas,
+      minMas: minMas ?? r.minMas,
     );
+  }
+
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'name': name,
+        'maker': maker,
+        'model': model,
+        'generator_type': type.code,
+        'power_kw': powerKw,
+        'inverter_khz': inverterKhz,
+        'ma_stations': maStations == null ? null : jsonEncode(maStations),
+        'min_ma': minMa,
+        'max_ma': maxMa,
+        'min_ms': minMs,
+        'max_ms': maxMs,
+        'min_mas': minMas,
+        'max_mas': maxMas,
+        'tol_ma_pct': tolerances.maPct,
+        'tol_ms_pct': tolerances.msPct,
+        'tol_mas_pct': tolerances.masPct,
+        'tol_mas_abs': tolerances.masAbs,
+        'alert_fraction': tolerances.alertFraction,
+        'tol_origin': tolerances.origin,
+        'tol_version': tolerances.version,
+        'tubes': jsonEncode(tubes),
+        'builtin': builtin ? 1 : 0,
+        'notes': notes,
+      };
+
+  factory GeneratorProfile.fromMap(Map<String, Object?> m) {
+    List<double>? st;
+    final raw = m['ma_stations'];
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final d = jsonDecode(raw);
+        if (d is List) st = d.whereType<num>().map((e) => e.toDouble()).toList();
+      } catch (_) {}
+    }
+    return GeneratorProfile(
+      id: m['id'].toString(),
+      name: m['name'].toString(),
+      maker: _str(m['maker']),
+      model: _str(m['model']),
+      type: GeneratorTypeInfo.fromCode(m['generator_type']?.toString()),
+      powerKw: _optDbl(m['power_kw']),
+      inverterKhz: _optDbl(m['inverter_khz']),
+      maStations: (st == null || st.isEmpty) ? null : st,
+      minMa: _optDbl(m['min_ma']),
+      maxMa: _optDbl(m['max_ma']),
+      minMs: _optDbl(m['min_ms']),
+      maxMs: _optDbl(m['max_ms']),
+      minMas: _optDbl(m['min_mas']),
+      maxMas: _optDbl(m['max_mas']),
+      tolerances: Tolerances(
+        maPct: _dbl(m['tol_ma_pct'], 10),
+        msPct: _dbl(m['tol_ms_pct'], 10),
+        masPct: _dbl(m['tol_mas_pct'], 10),
+        masAbs: _dbl(m['tol_mas_abs'], 0),
+        alertFraction: _dbl(m['alert_fraction'], 0.8),
+        origin: _str(m['tol_origin']),
+        version: _str(m['tol_version']),
+      ),
+      tubes: _strList(m['tubes']),
+      builtin: (m['builtin'] as int? ?? 0) == 1,
+      notes: _str(m['notes']),
+    );
+  }
+}
+
+/// Perfis que acompanham o aplicativo.
+class BuiltinProfiles {
+  static const sawaeAltusId = 'perfil-sawae-altus-st543hf';
+
+  /// Perfil genérico (editável) de cada tipo de gerador.
+  static String genericId(GeneratorType t) => 'perfil-generico-${t.code}';
+
+  static const userOrigin = 'Configuração do usuário (perfil genérico)';
+
+  static GeneratorProfile generic(GeneratorType t, Tolerances tol) => GeneratorProfile(
+        id: genericId(t),
+        name: 'Genérico — ${t.label}',
+        type: t,
+        tolerances: Tolerances(
+          maPct: tol.maPct,
+          msPct: tol.msPct,
+          masPct: tol.masPct,
+          masAbs: tol.masAbs,
+          alertFraction: tol.alertFraction,
+          origin: tol.origin ?? userOrigin,
+          version: tol.version ?? '1',
+        ),
+        builtin: true,
+      );
+
+  /// SAWAE ALTUS ST 543-HF — Manual Técnico do Conjunto Radiológico ALTUS,
+  /// revisão 19 (20/02/2015). Critério do manual apenas para o mAs.
+  static const sawaeAltus = GeneratorProfile(
+    id: sawaeAltusId,
+    name: 'SAWAE ALTUS ST 543-HF',
+    maker: 'SAWAE',
+    model: 'ALTUS ST 543-HF',
+    type: GeneratorType.highFrequency,
+    powerKw: 54,
+    inverterKhz: 36,
+    maStations: [80, 100, 125, 160, 200, 250, 320, 400, 500, 630],
+    minMas: 0.4,
+    maxMas: 500,
+    tolerances: Tolerances(
+      maPct: 0,
+      msPct: 0,
+      masPct: 10,
+      masAbs: 0.2,
+      alertFraction: 0.8,
+      origin: 'Manual Técnico do Conjunto Radiológico ALTUS, rev. 19 (20/02/2015)',
+      version: 'rev. 19',
+    ),
+    tubes: ['Toshiba E7242FX', 'Toshiba E7252FX', 'Siemens Ray8', 'Siemens Ray12'],
+    builtin: true,
+    notes: 'Aferição pelo manual: medidor de mAs externo e observação da forma de onda da corrente. '
+        'Referência de preparo influencia o pico inicial; referência de disparo influencia a amplitude '
+        'durante a exposição e o mAs. O critério do manual é só para o mAs; mA e tempo são exibidos sem '
+        'classificação.',
+  );
+}
 
 /// Entrada do registro de alterações (somente leitura).
 class AuditEntry {
@@ -429,6 +662,9 @@ class AppSettings {
   /// Limite do coeficiente de variação (%) na repetibilidade.
   final double cvLimitPct;
 
+  /// Exibir o tempo em segundos (true) ou milissegundos (false).
+  final bool timeInSeconds;
+
   const AppSettings({
     this.host = '192.168.4.1',
     this.port = 8080,
@@ -442,6 +678,7 @@ class AppSettings {
     this.detEndPct = 40,
     this.detMinMs = 0.5,
     this.cvLimitPct = 5,
+    this.timeInSeconds = false,
   });
 
   AppSettings copyWith({
@@ -457,6 +694,7 @@ class AppSettings {
     double? detEndPct,
     double? detMinMs,
     double? cvLimitPct,
+    bool? timeInSeconds,
   }) =>
       AppSettings(
         host: host ?? this.host,
@@ -471,6 +709,7 @@ class AppSettings {
         detEndPct: detEndPct ?? this.detEndPct,
         detMinMs: detMinMs ?? this.detMinMs,
         cvLimitPct: cvLimitPct ?? this.cvLimitPct,
+        timeInSeconds: timeInSeconds ?? this.timeInSeconds,
       );
 
   /// Convencionais (2, 6 e 12 pulsos) usam [tolerancesConv]; HF e
@@ -495,6 +734,7 @@ class AppSettings {
         'det_end_pct': detEndPct.toString(),
         'det_min_ms': detMinMs.toString(),
         'cv_limit_pct': cvLimitPct.toString(),
+        'time_unit': timeInSeconds ? 's' : 'ms',
         if (selectedEquipmentId != null) 'selected_equipment': selectedEquipmentId!,
       };
 
@@ -524,6 +764,7 @@ class AppSettings {
       detEndPct: n('det_end_pct', d.detEndPct),
       detMinMs: n('det_min_ms', d.detMinMs),
       cvLimitPct: n('cv_limit_pct', d.cvLimitPct),
+      timeInSeconds: m['time_unit'] == 's',
     );
   }
 }

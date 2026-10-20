@@ -9,7 +9,7 @@ String _csvCell(String v) {
 }
 
 String _tolText(Tolerances t) =>
-    'mA ±${fmt(t.maPct, 1)}% ms ±${fmt(t.msPct, 1)}% mAs ±${fmt(t.masPct, 1)}% alerta ${fmt(t.alertFraction * 100, 0)}%';
+    '${t.description} (alerta ${fmt(t.alertFraction * 100, 0)} %)${t.originText.isEmpty ? '' : ' — ${t.originText}'}';
 
 /// CSV no padrão brasileiro (separador ';' e vírgula decimal) para Excel.
 String buildCsv(Equipment eq, List<Reading> readings, Tolerances tol) {
@@ -17,7 +17,7 @@ String buildCsv(Equipment eq, List<Reading> readings, Tolerances tol) {
   b.writeln([
     'id_medicao', 'origem', 'equipamento', 'gerador', 'serie', 'id_interno', 'sessao', 'instrumento',
     'disparo', 'data_hora', 'mA_SET', 'ms_SET', 'mAs_SET', 'mA_READ', 'ms_READ', 'mAs_READ',
-    'erro_mA_%', 'erro_ms_%', 'erro_mAs_%', 'status', 'tolerancia_aplicada'
+    'erro_mA_%', 'erro_ms_%', 'erro_mAs_%', 'status', 'criterio_aplicado'
   ].join(';'));
   for (final r in readings) {
     final ev = evaluateReading(r, tol);
@@ -55,11 +55,13 @@ class Summary {
   final int failed;
   final double? meanErrMas;
   final double? maxAbsErrMas;
-  const Summary(this.total, this.approved, this.alert, this.failed, this.meanErrMas, this.maxAbsErrMas);
+  final int invalid;
+  const Summary(this.total, this.approved, this.alert, this.failed, this.meanErrMas, this.maxAbsErrMas,
+      {this.invalid = 0});
 }
 
 Summary summarize(List<Reading> readings, Tolerances tol) {
-  var a = 0, w = 0, f = 0;
+  var a = 0, w = 0, f = 0, inv = 0;
   final errs = <double>[];
   for (final r in readings) {
     final ev = evaluateReading(r, tol);
@@ -70,6 +72,8 @@ Summary summarize(List<Reading> readings, Tolerances tol) {
         w++;
       case MeasureStatus.failed:
         f++;
+      case MeasureStatus.invalid:
+        inv++;
       case MeasureStatus.unknown:
         break;
     }
@@ -77,7 +81,7 @@ Summary summarize(List<Reading> readings, Tolerances tol) {
   }
   final mean = errs.isEmpty ? null : errs.reduce((x, y) => x + y) / errs.length;
   final maxAbs = errs.isEmpty ? null : errs.map((e) => e.abs()).reduce((x, y) => x > y ? x : y);
-  return Summary(readings.length, a, w, f, mean, maxAbs);
+  return Summary(readings.length, a, w, f, mean, maxAbs, invalid: inv);
 }
 
 /// Relatório em texto simples (pode ser copiado para e-mail ou WhatsApp).

@@ -25,6 +25,7 @@ const _ok = PdfColor.fromInt(0xFF2E7D32);
 const _warn = PdfColor.fromInt(0xFFB7860B);
 const _fail = PdfColor.fromInt(0xFFC62828);
 const _demo = PdfColor.fromInt(0xFF7B1FA2);
+const _inv = PdfColor.fromInt(0xFFE65100);
 
 /// Relatório técnico em PDF (tela 9).
 Future<Uint8List> buildPdfReport({
@@ -35,6 +36,8 @@ Future<Uint8List> buildPdfReport({
   required Tolerances tol,
   required bool includesSimulated,
   required String appVersion,
+  GeneratorProfile? profile,
+  GeneratorLimits? limits,
   Uint8List? logoPng,
   String? reportId,
 }) async {
@@ -116,17 +119,31 @@ Future<Uint8List> buildPdfReport({
       kv('Tecnologia', eq.generatorType.label),
       kv('Fabricante / modelo', [eq.generatorMaker, eq.generatorModel].whereType<String>().join(' ').ifEmpty('—')),
       kv('Potência nominal', eq.powerKw == null ? '—' : '${fmtTrim(eq.powerKw!)} kW'),
-      kv(eq.hasCustomLimits ? 'Limites (manual)' : 'Limites (referência)',
-          '${fmtTrim(eq.limits.minMa)}–${fmtTrim(eq.limits.maxMa)} mA | ${fmtTrim(eq.limits.minMs)}–${fmtTrim(eq.limits.maxMs)} ms | até ${fmtTrim(eq.limits.maxMas)} mAs'),
+      if (profile != null) kv('Perfil do gerador', profile.name),
+      kv('Tubo', [eq.tubeMaker, eq.tubeModel].whereType<String>().join(' ').ifEmpty('—')),
+      () {
+        final l = limits ?? eq.limits;
+        return kv(eq.hasCustomLimits ? 'Limites (manual do equipamento)' : 'Limites (perfil/referência)',
+            '${fmtTrim(l.minMa)}–${fmtTrim(l.maxMa)} mA | ${fmtTrim(l.minMs)}–${fmtTrim(l.maxMs)} ms | ${fmtTrim(l.minMas)}–${fmtTrim(l.maxMas)} mAs');
+      }(),
+      if (eq.notes != null) kv('Observações do equipamento', eq.notes!),
       if (session != null) ...[
         section('Sessão e SET'),
         kv('Sessão', session.label ?? session.id),
         kv('Início', fmtDateTime(session.startedAt)),
         kv('SET', '${fmtTrim(session.setMa)} mA x ${fmtTrim(session.setMs)} ms = ${fmt(session.setMas)} mAs'),
+        kv('Origem do SET', session.setOrigin == 'instrumento' ? 'display do instrumento (modo local)' : 'aplicativo'),
+        if (session.tubeModel != null) kv('Tubo no teste', session.tubeModel!),
+        if (session.kvInfo != null) kv('kV utilizado (informado)', '${session.kvInfo!} — metadado; o X-METER não mede kV'),
+        () {
+          final (lo, hi) = tol.masInterval(session.setMas);
+          return kv('Aceitação do mAs', '${fmt(lo)} a ${fmt(hi)} mAs (${tol.masRule})');
+        }(),
       ],
       section('Critérios'),
-      kv('Tolerâncias atuais',
-          'mA ±${fmt(tol.maPct, 1)} % | tempo ±${fmt(tol.msPct, 1)} % | mAs ±${fmt(tol.masPct, 1)} % | alerta a partir de ${fmt(tol.alertFraction * 100, 0)} % da tolerância'),
+      kv('Critério de aceitação', '${tol.description} | alerta a partir de ${fmt(tol.alertFraction * 100, 0)} % da tolerância'),
+      kv('Origem do critério', tol.originText.ifEmpty('não informada')),
+      if (tol.maPct <= 0 || tol.msPct <= 0) kv('Nota', 'grandezas sem critério documentado são exibidas sem classificação'),
       kv('Observação', 'cada medição é avaliada com a tolerância gravada no momento em que foi recebida'),
       section('Resumo'),
       pw.Row(children: [
@@ -135,6 +152,7 @@ Future<Uint8List> buildPdfReport({
           ('Aprovadas', '${sum.approved}', _ok),
           ('Alerta', '${sum.alert}', _warn),
           ('Reprovadas', '${sum.failed}', _fail),
+          ('Inválidas', '${sum.invalid}', _inv),
         ])
           pw.Expanded(
             child: pw.Container(

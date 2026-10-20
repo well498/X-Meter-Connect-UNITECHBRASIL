@@ -290,3 +290,116 @@ Stats? stats(Iterable<double> values) {
       : sqrt(v.map((x) => (x - mean) * (x - mean)).reduce((a, b) => a + b) / (v.length - 1));
   return Stats(v.length, mean, sd, v.reduce(min), v.reduce(max));
 }
+
+// ---------------- Diagnóstico da forma de onda ----------------
+
+/// Indicadores da forma de onda de UMA exposição. São observações para o
+/// técnico — o aplicativo nunca comanda ajustes no gerador.
+class WaveDiagnostics {
+  final double startMs;
+  final double endMs;
+  final double timeMs;
+  final double mas;
+
+  /// Pico na partida (primeiros 10 % da exposição) e quanto passa do patamar.
+  final double initialPeakMa;
+  final double initialPeakTimeMs;
+  final double overshootPct;
+
+  /// Corrente média no patamar (região estável, sem a partida e o fim).
+  final double plateauMa;
+  final double plateauStartMs;
+  final double plateauEndMs;
+
+  /// Oscilação: coeficiente de variação das amostras do patamar (%).
+  final double rippleCvPct;
+
+  /// Estabilidade: variação da média entre a 2ª e a 1ª metade do patamar (%).
+  final double driftPct;
+
+  final double peakMa;
+  final double peakTimeMs;
+  final List<String> observations;
+
+  const WaveDiagnostics({
+    required this.startMs,
+    required this.endMs,
+    required this.timeMs,
+    required this.mas,
+    required this.initialPeakMa,
+    required this.initialPeakTimeMs,
+    required this.overshootPct,
+    required this.plateauMa,
+    required this.plateauStartMs,
+    required this.plateauEndMs,
+    required this.rippleCvPct,
+    required this.driftPct,
+    required this.peakMa,
+    required this.peakTimeMs,
+    required this.observations,
+  });
+}
+
+WaveDiagnostics? diagnoseWave(List<double> tMs, List<double> ma,
+    {DetectionConfig cfg = const DetectionConfig(), double? setMa}) {
+  final ex = detectExposure(tMs, ma, cfg: cfg);
+  if (ex.timeMs <= 0 || ex.endIndex <= ex.startIndex) return null;
+  final i0 = ex.startIndex, i1 = ex.endIndex;
+  final n = i1 - i0;
+  final startMs = tMs[i0];
+  final endMs = startMs + ex.timeMs;
+  // Partida: primeiros 10 % (mín. 1 amostra). Patamar: de 10 % a 95 %.
+  final iPlat0 = i0 + max(1, (n * 0.10).round());
+  final iPlat1 = max(iPlat0 + 1, i0 + (n * 0.95).round());
+  var ip = i0;
+  for (var i = i0; i <= min(iPlat0, ma.length - 1); i++) {
+    if (ma[i] > ma[ip]) ip = i;
+  }
+  var pk = i0;
+  for (var i = i0; i <= i1; i++) {
+    if (ma[i] > ma[pk]) pk = i;
+  }
+  final plat = ma.sublist(iPlat0, min(iPlat1, ma.length));
+  final st = stats(plat);
+  final plateau = st?.mean ?? ex.meanMa;
+  final half = plat.length ~/ 2;
+  final a = half > 0 ? stats(plat.sublist(0, half))?.mean : null;
+  final b = half > 0 ? stats(plat.sublist(half))?.mean : null;
+  final drift = (a != null && b != null && a != 0) ? (b - a) / a * 100 : 0.0;
+  final overshoot = plateau == 0 ? 0.0 : (ma[ip] - plateau) / plateau * 100;
+  final ripple = st?.cvPct ?? 0.0;
+
+  final obs = <String>[];
+  if (overshoot > 10) {
+    obs.add('Pico inicial ${overshoot.toStringAsFixed(1)} % acima do patamar (comportamento de partida da corrente).');
+  }
+  if (setMa != null && setMa > 0) {
+    final dev = (plateau - setMa) / setMa * 100;
+    if (dev.abs() > 5) {
+      obs.add('Corrente do patamar ${dev > 0 ? '+' : ''}${dev.toStringAsFixed(1)} % em relação ao mA SET.');
+    }
+  }
+  if (ripple > 5) obs.add('Oscilação no patamar: CV ${ripple.toStringAsFixed(1)} % (compare com a tecnologia do gerador).');
+  if (drift.abs() > 3) {
+    obs.add('Corrente ${drift > 0 ? 'sobe' : 'cai'} ${drift.abs().toStringAsFixed(1)} % ao longo da exposição (estabilidade).');
+  }
+  if (ex.flags.isNotEmpty) obs.add('Qualidade da aquisição: ${ex.flags.map((f) => f.label).join(', ')}.');
+
+  return WaveDiagnostics(
+    startMs: startMs,
+    endMs: endMs,
+    timeMs: ex.timeMs,
+    mas: ex.mas,
+    initialPeakMa: ma[ip],
+    initialPeakTimeMs: tMs[ip],
+    overshootPct: overshoot,
+    plateauMa: plateau,
+    plateauStartMs: tMs[iPlat0],
+    plateauEndMs: tMs[min(iPlat1, tMs.length - 1)],
+    rippleCvPct: ripple,
+    driftPct: drift,
+    peakMa: ma[pk],
+    peakTimeMs: tMs[pk],
+    observations: obs,
+  );
+}

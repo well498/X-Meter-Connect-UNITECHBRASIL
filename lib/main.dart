@@ -8,6 +8,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'app_state.dart';
 import 'database.dart';
+import 'screens/connectivity_page.dart';
 import 'screens/equipment_page.dart';
 import 'screens/home_page.dart';
 import 'screens/reports_page.dart';
@@ -15,7 +16,7 @@ import 'screens/settings_page.dart';
 import 'theme.dart';
 import 'widgets/common.dart';
 
-const appVersion = '1.8.0';
+const appVersion = '1.9.0';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -112,6 +113,7 @@ const _dests = [
   _Dest(Icons.home_outlined, Icons.home, 'Início'),
   _Dest(Icons.assignment_outlined, Icons.assignment, 'Equipamentos'),
   _Dest(Icons.description_outlined, Icons.description, 'Relatórios'),
+  _Dest(Icons.wifi_tethering, Icons.wifi_tethering, 'Conexão'),
   _Dest(Icons.settings_outlined, Icons.settings, 'Configurações'),
 ];
 
@@ -132,6 +134,7 @@ class _ShellState extends State<Shell> {
         0 => HomePage(state: s, goTo: goTo, version: appVersion),
         1 => EquipmentPage(state: s),
         2 => ReportsPage(state: s, version: appVersion),
+        3 => ConnectivityPage(state: s),
         _ => SettingsPage(state: s, version: appVersion),
       };
 

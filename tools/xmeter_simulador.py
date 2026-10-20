@@ -23,6 +23,9 @@ Comandos no terminal (digite e tecle Enter):
     a   gera um disparo com erro de ALERTA (~8 %)
     f   gera um disparo REPROVADO (~15 %)
     r   reenvia o último disparo com o MESMO shot_id (teste de duplicidade)
+    l   MODO LOCAL: muda o SET no "display" (100 mA / 50 ms) e faz um disparo
+    x   disparo FORA DA FAIXA (mAs > 2000): deve aparecer como INVÁLIDO
+    b   baixa a bateria em 30 % (alerta abaixo de 20 %)
     o   alterna modo fora do ar (responde HTTP 503: teste de desconexão)
     s   mostra o estado
     q   sai
@@ -51,11 +54,54 @@ STATE = {
     "next_shot": 1,
     "armed": False,
     "probe_id": "SIM-SONDA-01",
+    "battery": 87.0,
+    "charging": False,
+    "mode": "connected",
+    "set_origin": "app",
+    "set_changed_at": None,
 }
 
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def local_set_change():
+    """Simula o técnico alterando o SET pelos botões do instrumento."""
+    with LOCK:
+        STATE["session_id"] = "local-%d" % int(datetime.now().timestamp())
+        STATE["set_ma"], STATE["set_ms"] = 100.0, 50.0
+        STATE["set_origin"] = "instrumento"
+        STATE["set_changed_at"] = now_iso()
+        STATE["mode"] = "local"
+    print("> MODO LOCAL: SET alterado no display para 100 mA / 50 ms (sessão %s)" % STATE["session_id"])
+
+
+def out_of_range_shot():
+    with LOCK:
+        if STATE["session_id"] is None:
+            print("! Envie um SET primeiro.")
+            return
+        shot_id = "SIM-%05d" % STATE["next_shot"]
+        STATE["next_shot"] += 1
+        STATE["readings"].append({
+            "cursor": len(STATE["readings"]) + 1,
+            "shot_id": shot_id,
+            "session_id": STATE["session_id"],
+            "quality": "out_of_range",
+            "simulated": True,
+            "set_ma": STATE["set_ma"],
+            "set_ms": STATE["set_ms"],
+            "read_ma": 1250.0,
+            "read_ms": 2000.0,
+            "read_mas": 2500.0,
+            "ma_peak": 1300.0,
+            "flags": ["fora_da_faixa"],
+            "recorded_at": now_iso(),
+            "probe_id": STATE["probe_id"],
+            "cal_status": "simulador (sem calibração)",
+        })
+    print("> %s: FORA DA FAIXA (2500 mAs) — o app deve registrar como INVÁLIDA, sem truncar" % shot_id)
 
 
 def make_shot(error_pct=None, repeat=False):
@@ -167,10 +213,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {
                 "device_id": STATE["device_id"],
                 "protocol_version": PROTOCOL_VERSION,
-                "firmware": "simulador-1.1",
+                "firmware": "simulador-1.2",
+                "model": "UNITECH X-METER (simulador)",
                 "probe_id": STATE["probe_id"],
+                "battery": {"percent": round(STATE["battery"]), "charging": STATE["charging"]},
+                "mode": STATE["mode"],
+                "transport": "wifi",
+                "calibration": {"status": "simulador", "due": None},
+                "alerts": (["bateria fraca"] if STATE["battery"] < 20 else []),
                 "simulated": True,
             })
+        if url.path == "/v1/session/set":
+            with LOCK:
+                if STATE["session_id"] is None:
+                    return self._send(404, {"error": "sem SET"})
+                return self._send(200, {
+                    "session_id": STATE["session_id"],
+                    "set_ma": STATE["set_ma"],
+                    "set_ms": STATE["set_ms"],
+                    "set_mas": STATE["set_ma"] * STATE["set_ms"] / 1000.0,
+                    "origin": STATE["set_origin"],
+                    "changed_at": STATE["set_changed_at"],
+                })
         if url.path == "/v1/readings":
             q = parse_qs(url.query)
             try:
@@ -225,6 +289,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"accepted": False, "error": str(e)})
         with LOCK:
             STATE["session_id"], STATE["set_ma"], STATE["set_ms"] = sid, ma, ms
+            STATE["set_origin"], STATE["set_changed_at"], STATE["mode"] = "app", now_iso(), "connected"
         print("> SET recebido: sessão %s, %.1f mA, %.1f ms = %.2f mAs" % (sid, ma, ms, ma * ms / 1000))
         self._send(200, {"accepted": True, "session_id": sid})
 
@@ -257,7 +322,7 @@ def main():
         threading.Thread(target=auto_loop, args=(args.auto, stop), daemon=True).start()
     print("Simulador X-METER em http://%s:%d  (device_id=%s, token=%s)"
           % (args.host, args.port, args.device_id, args.token or "nenhum"))
-    print("Comandos: d=disparo  a=alerta  f=falha  r=repetir  o=fora do ar  s=estado  q=sair")
+    print("Comandos: d=disparo a=alerta f=falha r=repetir l=modo local x=fora da faixa b=bateria o=fora do ar s=estado q=sair")
     try:
         for line in sys.stdin:
             c = line.strip().lower()
@@ -269,6 +334,14 @@ def main():
                 make_shot(error_pct=15)
             elif c == "r":
                 make_shot(repeat=True)
+            elif c == "l":
+                local_set_change()
+                make_shot()
+            elif c == "x":
+                out_of_range_shot()
+            elif c == "b":
+                STATE["battery"] = max(0.0, STATE["battery"] - 30)
+                print("> Bateria: %d %%" % STATE["battery"])
             elif c == "o":
                 STATE["offline"] = not STATE["offline"]
                 print("> Modo fora do ar:", "LIGADO (HTTP 503)" if STATE["offline"] else "desligado")

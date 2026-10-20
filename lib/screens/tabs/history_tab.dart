@@ -18,9 +18,39 @@ class HistoryTab extends StatefulWidget {
   State<HistoryTab> createState() => _HistoryTabState();
 }
 
+enum _Period { all, today, week, month }
+
 class _HistoryTabState extends State<HistoryTab> {
   _Filter filter = _Filter.all;
   bool onlySession = false;
+  bool allEquipment = false;
+  _Period period = _Period.all;
+  String? sessionId;
+  List<Reading>? _all;
+  List<MeasureSession> _sessions = [];
+
+  Future<void> _loadAll() async {
+    final r = await widget.state.db.readings();
+    if (mounted) setState(() => _all = r);
+  }
+
+  Future<void> _loadSessions() async {
+    final eq = widget.state.selected;
+    if (eq == null) return;
+    final ss = await widget.state.db.sessions(eq.id);
+    if (mounted) setState(() => _sessions = ss);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSessions();
+  }
+
+  String _equipmentName(String id) =>
+      firstOrNull(widget.state.equipments.followedBy(widget.state.archivedEquipments).where((e) => e.id == id))
+          ?.title ??
+      id;
 
   void _details(Reading r) {
     final ev = widget.state.evalOf(r);
@@ -64,8 +94,17 @@ class _HistoryTabState extends State<HistoryTab> {
   @override
   Widget build(BuildContext context) {
     final s = widget.state;
-    var list = s.readings;
+    var list = allEquipment ? (_all ?? s.readings) : s.readings;
     if (onlySession) list = list.where((r) => r.sessionId == s.session?.id).toList();
+    if (sessionId != null && !allEquipment) list = list.where((r) => r.sessionId == sessionId).toList();
+    final now = DateTime.now();
+    final from = switch (period) {
+      _Period.today => DateTime(now.year, now.month, now.day),
+      _Period.week => now.subtract(const Duration(days: 7)),
+      _Period.month => now.subtract(const Duration(days: 30)),
+      _Period.all => null,
+    };
+    if (from != null) list = list.where((r) => r.when.isAfter(from)).toList();
     if (filter == _Filter.real) list = list.where((r) => !r.isDemo).toList();
     if (filter == _Filter.demo) list = list.where((r) => r.isDemo).toList();
     final sessions = s.readings.map((r) => r.sessionId).toSet().length;
@@ -89,7 +128,56 @@ class _HistoryTabState extends State<HistoryTab> {
           selected: onlySession,
           onSelected: (v) => setState(() => onlySession = v),
         ),
+        FilterChip(
+          label: const Text('Todos os equipamentos'),
+          selected: allEquipment,
+          onSelected: (v) {
+            setState(() => allEquipment = v);
+            if (v) _loadAll();
+          },
+        ),
       ]),
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        const Text('Período:', style: TextStyle(color: XColors.gray)),
+        for (final p in _Period.values)
+          ChoiceChip(
+            label: Text(switch (p) {
+              _Period.all => 'Tudo',
+              _Period.today => 'Hoje',
+              _Period.week => '7 dias',
+              _Period.month => '30 dias',
+            }),
+            selected: period == p,
+            onSelected: (_) => setState(() => period = p),
+          ),
+      ]),
+      if (!allEquipment && _sessions.length > 1) ...[
+        const SizedBox(height: 8),
+        InputDecorator(
+          decoration: const InputDecoration(
+              labelText: 'Sessão', contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 2)),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String?>(
+              value: _sessions.any((x) => x.id == sessionId) ? sessionId : null,
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('Todas as sessões')),
+                for (final ss in _sessions)
+                  DropdownMenuItem<String?>(
+                    value: ss.id,
+                    child: Text(
+                      '${fmtDateTime(ss.startedAt)} • ${ss.label ?? '${fmtTrim(ss.setMa)} mA × ${fmtTrim(ss.setMs)} ms'}'
+                      '${ss.setOrigin == 'instrumento' ? ' (instrumento)' : ''}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (v) => setState(() => sessionId = v),
+            ),
+          ),
+        ),
+      ],
       const SizedBox(height: 12),
       if (list.isEmpty)
         const Card(
@@ -115,6 +203,7 @@ class _HistoryTabState extends State<HistoryTab> {
               subtitle: Text(
                 '${fmtDateTime(r.when)} • erro mAs ${fmtSigned(s.evalOf(r).errMas)} % • '
                 'mA ${fmt(r.readMa, 1)} • ms ${fmt(r.readMs, 1)}\n'
+                '${allEquipment ? '${_equipmentName(r.equipmentId)} • ' : ''}'
                 '${r.isDemo ? '${r.sourceLabel} ${r.deviceId}' : r.deviceId} • disparo ${r.shotId}'
                 '${r.sessionId == s.session?.id ? ' • sessão atual' : ''}',
               ),

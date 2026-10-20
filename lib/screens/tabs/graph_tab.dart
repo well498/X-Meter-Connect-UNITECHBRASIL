@@ -52,13 +52,25 @@ class _GraphTabState extends State<GraphTab> {
           padding: const EdgeInsets.fromLTRB(8, 10, 10, 6),
           child: SizedBox(
             height: max(300.0, h * 0.42),
-            child: WaveChart(series: series, referenceMa: chosen.first.setMa),
+            child: () {
+              final w = chosen.first.waveform!;
+              final d = chosen.length == 1
+                  ? diagnoseWave(uniformTimes(w.ma.length, w.samplePeriodUs), w.ma,
+                      cfg: s.detection, setMa: chosen.first.setMa)
+                  : null;
+              return WaveChart(
+                series: series,
+                referenceMa: chosen.first.setMa,
+                markers: diagMarkers(d),
+                plateauMa: d?.plateauMa,
+              );
+            }(),
           ),
         ),
       ),
       const SizedBox(height: 6),
       const Text('Pinça ou botões ampliam o tempo • arraste para navegar • toque duplo volta à visão completa. '
-          'Linha tracejada: mA SET.',
+          'Tracejado cinza: mA SET • linha verde: patamar • marcas: início, fim e picos (com 1 disparo selecionado).',
           style: TextStyle(color: XColors.gray, fontSize: 12)),
       const SizedBox(height: 12),
       for (var i = 0; i < chosen.length; i++) _analysis(chosen[i], XColors.series[i % XColors.series.length], s),

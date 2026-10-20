@@ -1,7 +1,7 @@
 name: unitech_xmeter_connect
 description: UNITECH X-METER CONNECT — aplicativo de campo para o medidor de mA, tempo e mAs UNITECH X-METER.
 publish_to: none
-version: 1.8.0+18
+version: 1.9.0+19
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

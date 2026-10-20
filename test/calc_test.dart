@@ -139,4 +139,68 @@ void main() {
       expect(fmtTrim(6.3), '6,3');
     });
   });
+
+  group('critério de aceitação com parcela absoluta (perfil SAWAE ALTUS)', () {
+    const sawae = Tolerances(maPct: 0, msPct: 0, masPct: 10, masAbs: 0.2, origin: 'Manual ALTUS', version: 'rev. 19');
+
+    test('20 mAs: tolerância 2,2 mAs e aceitação de 17,8 a 22,2 mAs', () {
+      expect(sawae.masTolerance(20), closeTo(2.2, 1e-12));
+      final (lo, hi) = sawae.masInterval(20);
+      expect(lo, closeTo(17.8, 1e-12));
+      expect(hi, closeTo(22.2, 1e-12));
+      expect(fmt(lo), '17,80');
+      expect(fmt(hi), '22,20');
+      expect(sawae.masRule, '±(10 % + 0,2 mAs)');
+      expect(sawae.originText, 'Manual ALTUS, versão rev. 19');
+    });
+
+    Evaluation ev(double readMas) =>
+        evaluate(setMa: 200, setMs: 100, readMa: 200, readMs: 100, readMas: readMas, tol: sawae);
+
+    test('classificação nos limites do intervalo', () {
+      expect(ev(20).status, MeasureStatus.approved);
+      expect(ev(22.2).status, isNot(MeasureStatus.failed), reason: 'limite superior aceito');
+      expect(ev(17.8).status, isNot(MeasureStatus.failed), reason: 'limite inferior aceito');
+      expect(ev(22.25).status, MeasureStatus.failed);
+      expect(ev(17.7).status, MeasureStatus.failed);
+    });
+
+    test('mA e tempo sem critério documentado não reprovam', () {
+      final e = evaluate(setMa: 200, setMs: 100, readMa: 260, readMs: 77, readMas: 20.0, tol: sawae);
+      expect(e.status, MeasureStatus.approved);
+      expect(e.errMa, closeTo(30, 1e-9), reason: 'erro de mA continua sendo calculado e exibido');
+    });
+
+    test('parcela absoluta pesa mais em mAs baixos', () {
+      expect(sawae.masTolerance(0.4), closeTo(0.24, 1e-12));
+      expect(sawae.masEffectivePct(0.4), closeTo(60, 1e-9));
+    });
+  });
+
+  group('faixa do instrumento', () {
+    test('valores dentro e fora da faixa', () {
+      expect(InstrumentRange.check(200, 100, 20), isNull);
+      expect(InstrumentRange.check(200, 100, 2500), contains('mAs'));
+      expect(InstrumentRange.check(1600, 100, 160), contains('corrente'));
+      expect(InstrumentRange.check(200, 12000, 1500), contains('tempo'));
+      expect(InstrumentRange.check(10, 0.5, 0.005), isNotNull);
+    });
+
+    test('limite mínimo de mAs do gerador', () {
+      const lim = GeneratorLimits(80, 630, 1, 6300, 500, minMas: 0.4);
+      expect(lim.check(80, 3), contains('mínimo'), reason: '80 mA × 3 ms = 0,24 mAs < 0,4');
+      expect(lim.check(80, 5), isNull);
+    });
+
+    test('status inválido prevalece', () {
+      expect(worst([MeasureStatus.approved, MeasureStatus.invalid]), MeasureStatus.invalid);
+      expect(MeasureStatusText.fromCode('invalid'), MeasureStatus.invalid);
+    });
+
+    test('tempo em ms ou s', () {
+      expect(fmtTime(100), '100,0');
+      expect(fmtTime(100, seconds: true), '0,100');
+      expect(fmtTime(2.5), '2,50');
+    });
+  });
 }

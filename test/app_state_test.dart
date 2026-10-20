@@ -19,6 +19,10 @@ class FakeInstrument {
   int setCalls = 0;
   int armCalls = 0;
 
+  /// SET alterado no display do instrumento (modo local); null = recurso ausente (404).
+  Map<String, Object?>? localSet;
+  double battery = 76;
+
   int get port => server.port;
 
   Future<void> start() async {
@@ -53,7 +57,19 @@ class FakeInstrument {
     if (req.headers.value('authorization') != 'Bearer tok') return send(401, {'error': 'auth'});
     final path = req.uri.path;
     if (req.method == 'GET' && path == '/v1/device') {
-      return send(200, {'device_id': 'XM-TEST', 'protocol_version': 1});
+      return send(200, {
+        'device_id': 'XM-TEST',
+        'protocol_version': 1,
+        'firmware': '0.9.0',
+        'battery': {'percent': battery, 'charging': false},
+        'mode': localSet == null ? 'connected' : 'local',
+        'transport': 'wifi',
+        'alerts': battery < 20 ? ['bateria fraca'] : [],
+      });
+    }
+    if (req.method == 'GET' && path == '/v1/session/set') {
+      if (localSet == null) return send(404, {'error': 'not found'});
+      return send(200, localSet!);
     }
     if (req.method == 'PUT' && path == '/v1/session/set') {
       final body = jsonDecode(await utf8.decoder.bind(req).join()) as Map;
@@ -242,5 +258,61 @@ void main() {
     expect(state.notes.single.text, 'Teste de observação');
     await state.generateDemoShot();
     expect(state.displayed, isNotNull, reason: 'nova medição volta a aparecer');
+  });
+
+  test('estado do instrumento: bateria, modo e alertas', () async {
+    await state.connect();
+    expect(state.deviceInfo!.batteryPct, 76);
+    expect(state.deviceInfo!.mode, 'connected');
+    expect(state.deviceInfo!.firmware, '0.9.0');
+    inst.battery = 15;
+    await state.refreshInstrument();
+    expect(state.deviceInfo!.alerts, ['bateria fraca']);
+    expect(state.connected, isTrue, reason: '404 no SET do instrumento não derruba a conexão');
+  });
+
+  test('MODO LOCAL: SET alterado no instrumento é adotado com a origem', () async {
+    await state.connect();
+    inst.localSet = {
+      'session_id': 'local-77',
+      'set_ma': 100,
+      'set_ms': 50,
+      'origin': 'instrumento',
+      'changed_at': DateTime.now().toUtc().add(const Duration(seconds: 5)).toIso8601String(),
+    };
+    await state.refreshInstrument();
+    expect(state.session!.id, 'local-77');
+    expect(state.session!.setOrigin, 'instrumento');
+    expect(state.session!.setMas, closeTo(5, 1e-9));
+    // Disparo feito no modo local chega na sincronização, na sessão do instrumento.
+    inst.sessionId = 'local-77';
+    inst.addShot('L1', 5.05);
+    await state.syncNow();
+    expect(state.sessionReadings, hasLength(1));
+  });
+
+  test('perfil SAWAE: setas de 80 a 630 mA e mAs mínimo de 0,4', () async {
+    final e = state.selected!;
+    await state.saveEquipment(Equipment(
+        id: e.id,
+        manufacturer: 'SAWAE',
+        model: 'ALTUS',
+        generatorType: GeneratorType.highFrequency,
+        profileId: BuiltinProfiles.sawaeAltusId,
+        createdAt: e.createdAt,
+        updatedAt: DateTime.now()));
+    final eq = state.selected!;
+    final st = state.maStationsOf(eq);
+    expect(st, [80, 100, 125, 160, 200, 250, 320, 400, 500, 630]);
+    expect(stepValue(st, 630, up: true), 630);
+    expect(stepValue(st, 80, up: false), 80);
+    expect(stepValue(st, 200, up: true), 250);
+    expect(state.tol.masRule, '±(10 % + 0,2 mAs)');
+    expect(await state.saveSet(700, 100), contains('mA'));
+    expect(await state.saveSet(80, 3), contains('mínimo'), reason: '0,24 mAs < 0,4 mAs');
+    expect(await state.saveSet(200, 100), isNull);
+    final (lo, hi) = state.tol.masInterval(state.session!.setMas);
+    expect(fmt(lo), '17,80');
+    expect(fmt(hi), '22,20');
   });
 }

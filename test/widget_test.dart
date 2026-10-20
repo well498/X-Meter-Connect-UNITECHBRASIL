@@ -45,6 +45,8 @@ void main() {
     expect(find.text('Iniciar Medição'), findsOneWidget);
     expect(find.byType(NavigationBar), findsOneWidget);
     expect(find.textContaining('Nenhum valor READ'), findsOneWidget, reason: 'sem números inventados');
+    expect(find.textContaining('Aceitação: 18,00 a 22,00 mAs'), findsOneWidget, reason: 'perfil genérico ±10 %');
+    expect(find.textContaining('kV do teste'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     // ▲ mA: 200 → 250 (25,00 mAs); ▼ tempo: 100 → 80 (20,00 mAs).
@@ -63,7 +65,7 @@ void main() {
       await tester.pump();
       expect(tester.takeException(), isNull, reason: tab);
     }
-    for (final dest in ['Equipamentos', 'Relatórios', 'Configurações', 'Início']) {
+    for (final dest in ['Equipamentos', 'Relatórios', 'Conexão', 'Configurações', 'Início']) {
       await tester.tap(find.descendant(of: find.byType(NavigationBar), matching: find.text(dest)).first);
       await tester.pump();
       expect(tester.takeException(), isNull, reason: dest);
@@ -78,11 +80,11 @@ void main() {
     await pumpAt(tester, state, const Size(1280, 900));
 
     expect(find.byType(NavigationRail), findsOneWidget);
-    for (final label in ['Início', 'Equipamentos', 'Relatórios', 'Configurações']) {
+    for (final label in ['Início', 'Equipamentos', 'Relatórios', 'Conexão', 'Configurações']) {
       expect(find.text(label), findsWidgets, reason: label);
     }
     expect(find.text('20,00'), findsOneWidget);
-    for (final label in ['Equipamentos', 'Relatórios', 'Configurações', 'Início']) {
+    for (final label in ['Equipamentos', 'Relatórios', 'Conexão', 'Configurações', 'Início']) {
       await tester.tap(find.descendant(of: find.byType(NavigationRail), matching: find.text(label)).first);
       await tester.pump();
       expect(tester.takeException(), isNull, reason: label);

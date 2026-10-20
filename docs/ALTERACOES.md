@@ -68,3 +68,21 @@ aos modelos atendidos pela UNITECH.
 | 11. Persistência | Banco v4: sonda, estado de calibração, observações do técnico (somente inclusão), indicadores de qualidade |
 | 13. Relatórios | PDF técnico (logo, cliente, gerador, critérios, resumo, repetibilidade, tabela, forma de onda, observações, assinatura) |
 | Simulador | v1.1: armar, corrente máxima, indicadores, sonda; números consistentes com a análise do app |
+
+# Alterações V1.8.0 → V1.9.0 (Prompt Master — atualização V1.7)
+
+| Item | Implementação |
+|---|---|
+| Escopo | Somente mA, mAs, tempo e forma de onda (sem kVp/dose/HVL); kV apenas como metadado do teste |
+| Perfis de gerador (banco v5) | Faixas, estações de mA, tubos e critério de aceitação com **origem e versão**; perfis genéricos por tipo e perfis do usuário; nenhum critério é aplicado a todos automaticamente |
+| SAWAE ALTUS ST 543-HF | HF, 54 kW, inversor 36 kHz, 80–630 mA (10 estações), 0,4–500 mAs, tubos Toshiba E7242FX/E7252FX e Siemens Ray8/Ray12, mAs ±(10 % + 0,2 mAs) — manual rev. 19 (20/02/2015); perfil documentado (só duplicável) |
+| Critério com parcela absoluta | `Tolerances.masAbs`; faixa de aceitação exibida no SET, na medição e no PDF |
+| Fora da faixa | Leituras > 1.500 mA, > 10.000 ms, > 2.000 mAs ou < 0,01 mAs: gravadas sem truncar como **INVÁLIDAS** |
+| Modo local / conectado | Protocolo v1.2: estado (bateria, modo, alertas, calibração), SET com origem, sessões do modo local |
+| Conectividade | Nova tela com estado do instrumento, transporte, sincronização |
+| Equipamento | Perfil, tubo (fabricante/modelo), observações, data e horário, pesquisa |
+| Forma de onda | Marcas de início, fim, pico inicial, pico máximo e patamar; diagnóstico (pico inicial, patamar, oscilação, estabilidade) como indicadores |
+| Histórico | Filtros por equipamento, período e sessão |
+| Unidades | Tempo em ms ou s |
+| Documentação | Manual de utilização, pendências do hardware, protocolo v1.2 |
+| Simulador | v1.2: modo local (`l`), fora da faixa (`x`), bateria (`b`), SET com origem |

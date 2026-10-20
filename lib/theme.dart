@@ -24,6 +24,7 @@ class XColors {
   static const warn = Color(0xFFF5B800);
   static const fail = Color(0xFFEF4444);
   static const demo = Color(0xFFA855F7);
+  static const invalid = Color(0xFFF97316);
 
   /// Cores das séries na comparação de disparos.
   static const series = [cyan, Color(0xFFF59E0B), Color(0xFFA78BFA), Color(0xFF34D399)];
@@ -32,6 +33,7 @@ class XColors {
         MeasureStatus.approved => ok,
         MeasureStatus.alert => warn,
         MeasureStatus.failed => fail,
+        MeasureStatus.invalid => invalid,
         MeasureStatus.unknown => gray,
       };
 

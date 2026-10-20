@@ -11,13 +11,16 @@ double? errorPercent(double set, double read) {
   return (read - set) / set * 100.0;
 }
 
-enum MeasureStatus { approved, alert, failed, unknown }
+/// [invalid]: medição fora da faixa do instrumento, saturada ou sem
+/// exposição válida — nunca é classificada como aprovada.
+enum MeasureStatus { approved, alert, failed, invalid, unknown }
 
 extension MeasureStatusText on MeasureStatus {
   String get code => switch (this) {
         MeasureStatus.approved => 'approved',
         MeasureStatus.alert => 'alert',
         MeasureStatus.failed => 'failed',
+        MeasureStatus.invalid => 'invalid',
         MeasureStatus.unknown => 'unknown',
       };
 
@@ -25,6 +28,7 @@ extension MeasureStatusText on MeasureStatus {
         MeasureStatus.approved => 'APROVADO',
         MeasureStatus.alert => 'ALERTA',
         MeasureStatus.failed => 'REPROVADO',
+        MeasureStatus.invalid => 'INVÁLIDA',
         MeasureStatus.unknown => 'SEM DADOS',
       };
 
@@ -32,25 +36,61 @@ extension MeasureStatusText on MeasureStatus {
         'approved' => MeasureStatus.approved,
         'alert' => MeasureStatus.alert,
         'failed' => MeasureStatus.failed,
+        'invalid' => MeasureStatus.invalid,
         _ => MeasureStatus.unknown,
       };
 }
 
-/// Tolerâncias em % (±) para cada grandeza.
-/// [alertFraction] define a faixa amarela: a partir dessa fração da
-/// tolerância o resultado é ALERTA; acima da tolerância é REPROVADO.
+/// Critério de aceitação.
+///
+/// mA e tempo: ±% do valor SET (0 = não avaliado pelo critério).
+/// mAs: ±([masPct] % do mAs SET + [masAbs] mAs) — ex.: SAWAE ALTUS
+/// ±(10 % + 0,2 mAs). [alertFraction] define a faixa amarela.
+/// [origin] e [version] registram de onde veio o critério.
 class Tolerances {
   final double maPct;
   final double msPct;
   final double masPct;
+  final double masAbs;
   final double alertFraction;
+  final String? origin;
+  final String? version;
 
   const Tolerances({
     this.maPct = 10,
     this.msPct = 10,
     this.masPct = 10,
+    this.masAbs = 0,
     this.alertFraction = 0.8,
+    this.origin,
+    this.version,
   });
+
+  /// Tolerância absoluta do mAs (mAs) para um mAs SET.
+  double masTolerance(double setMas) => setMas.abs() * masPct / 100 + masAbs;
+
+  /// Intervalo de aceitação do mAs.
+  (double, double) masInterval(double setMas) =>
+      (setMas - masTolerance(setMas), setMas + masTolerance(setMas));
+
+  /// Tolerância do mAs expressa em % do SET (para classificar o erro %).
+  double masEffectivePct(double setMas) => setMas == 0 ? masPct : masTolerance(setMas) / setMas.abs() * 100;
+
+  String get masRule => masAbs > 0
+      ? '±(${fmtTrim(masPct)} % + ${fmtTrim(masAbs)} mAs)'
+      : '±${fmtTrim(masPct)} %';
+
+  String get description {
+    final parts = [
+      if (maPct > 0) 'mA ±${fmtTrim(maPct)} %',
+      if (msPct > 0) 'tempo ±${fmtTrim(msPct)} %',
+      'mAs $masRule',
+    ];
+    return parts.join(' | ');
+  }
+
+  String get originText =>
+      [origin, if (version != null && version!.isNotEmpty) 'versão $version'].whereType<String>().join(', ');
 }
 
 MeasureStatus classifyError(double? errPct, double tolPct, double alertFraction) {
@@ -70,6 +110,7 @@ MeasureStatus worst(Iterable<MeasureStatus> all) {
   for (final s in all) {
     if (s == MeasureStatus.unknown) continue;
     any = true;
+    if (s == MeasureStatus.invalid) return MeasureStatus.invalid;
     if (s == MeasureStatus.failed) return MeasureStatus.failed;
     if (s == MeasureStatus.alert) result = MeasureStatus.alert;
   }
@@ -94,11 +135,12 @@ Evaluation evaluate({
 }) {
   final eMa = errorPercent(setMa, readMa);
   final eMs = errorPercent(setMs, readMs);
-  final eMas = errorPercent(masFrom(setMa, setMs), readMas);
+  final setMas = masFrom(setMa, setMs);
+  final eMas = errorPercent(setMas, readMas);
   final status = worst([
     classifyError(eMa, tol.maPct, tol.alertFraction),
     classifyError(eMs, tol.msPct, tol.alertFraction),
-    classifyError(eMas, tol.masPct, tol.alertFraction),
+    classifyError(eMas, tol.masEffectivePct(setMas), tol.alertFraction),
   ]);
   return Evaluation(eMa, eMs, eMas, status);
 }
@@ -159,6 +201,26 @@ class InstrumentRange {
   static const maxMs = 10000.0;
   static const minMas = 0.01;
   static const maxMas = 2000.0;
+
+  /// Motivo pelo qual uma leitura está fora da faixa do instrumento, ou
+  /// null. Valores fora da faixa NÃO são truncados: ficam registrados como
+  /// medição INVÁLIDA.
+  static String? check(double readMa, double readMs, double readMas) {
+    if (readMa > maxMa) return 'corrente acima de ${fmtTrim(maxMa)} mA';
+    if (readMs > maxMs) return 'tempo acima de ${fmtTrim(maxMs)} ms';
+    if (readMas > maxMas) return 'mAs acima de ${fmtTrim(maxMas)} mAs';
+    if (readMas < minMas) return 'mAs abaixo de ${fmtTrim(minMas)} mAs';
+    if (readMs < minMs) return 'tempo abaixo de ${fmtTrim(minMs)} ms';
+    if (readMa < minMa) return 'corrente abaixo de ${fmtTrim(minMa)} mA';
+    return null;
+  }
+}
+
+/// Unidade de exibição do tempo.
+String fmtTime(double? ms, {bool seconds = false, int? decimals}) {
+  if (ms == null || !ms.isFinite) return '—';
+  if (seconds) return fmt(ms / 1000, decimals ?? 3);
+  return fmt(ms, decimals ?? (ms < 10 ? 2 : 1));
 }
 
 /// Limites de um gerador. Vêm do manual técnico do aparelho; quando não
@@ -169,7 +231,9 @@ class GeneratorLimits {
   final double minMs;
   final double maxMs;
   final double maxMas;
-  const GeneratorLimits(this.minMa, this.maxMa, this.minMs, this.maxMs, this.maxMas);
+  final double minMas;
+  const GeneratorLimits(this.minMa, this.maxMa, this.minMs, this.maxMs, this.maxMas,
+      {this.minMas = InstrumentRange.minMas});
 
   /// Mensagem de erro se o SET estiver fora dos limites, ou null.
   String? check(double ma, double ms) {
@@ -177,6 +241,7 @@ class GeneratorLimits {
     if (ms < minMs || ms > maxMs) return 'Tempo SET fora da faixa do gerador (${fmtTrim(minMs)} a ${fmtTrim(maxMs)} ms)';
     final mas = masFrom(ma, ms);
     if (mas > maxMas) return 'mAs SET ${fmt(mas)} excede o limite do gerador (${fmtTrim(maxMas)} mAs)';
+    if (mas < minMas - 1e-9) return 'mAs SET ${fmt(mas)} abaixo do mínimo do gerador (${fmtTrim(minMas)} mAs)';
     if (mas < InstrumentRange.minMas) return 'mAs SET abaixo da faixa do instrumento';
     return null;
   }

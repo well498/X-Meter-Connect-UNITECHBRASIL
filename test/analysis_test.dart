@@ -174,4 +174,47 @@ void main() {
       expect(stats([double.nan]), isNull);
     });
   });
+
+  group('diagnóstico da forma de onda', () {
+    test('pico inicial, patamar, tempo e mAs', () {
+      final p = pulse(ma: 200, timeMs: 100, rise: 0.5);
+      // Pico de partida: +30 % nos primeiros 3 ms da exposição.
+      for (var i = 0; i < p.t.length; i++) {
+        if (p.t[i] >= 10.3 && p.t[i] < 13) p.ma[i] = 260;
+      }
+      final d = diagnoseWave(p.t, p.ma, setMa: 200)!;
+      expect(d.initialPeakMa, closeTo(260, 0.01));
+      expect(d.overshootPct, closeTo(30, 1));
+      expect(d.plateauMa, closeTo(200, 0.5));
+      expect(d.timeMs, closeTo(100, 0.2), reason: 'limiar a 50 % do pico inicial');
+      expect(d.startMs, closeTo(10, 0.1));
+      expect(d.observations.any((o) => o.contains('Pico inicial')), isTrue);
+    });
+
+    test('corrente que sobe durante a exposição é indicada (estabilidade)', () {
+      final p = pulse(ma: 200, timeMs: 100, shape: (t) => t < 10 ? 1.0 : 1 + 0.12 * (t - 10) / 100);
+      final d = diagnoseWave(p.t, p.ma, setMa: 200)!;
+      expect(d.driftPct, greaterThan(3));
+      expect(d.observations.any((o) => o.contains('estabilidade')), isTrue);
+    });
+
+    test('patamar fora do mA SET gera observação, sem comando de ajuste', () {
+      final p = pulse(ma: 230, timeMs: 50);
+      final d = diagnoseWave(p.t, p.ma, setMa: 200)!;
+      expect(d.observations.any((o) => o.contains('mA SET')), isTrue);
+      expect(d.observations.join(' ').toLowerCase(), isNot(contains('ajuste o')));
+    });
+
+    test('pulso limpo de alta frequência não gera observações', () {
+      final p = pulse();
+      final d = diagnoseWave(p.t, p.ma, setMa: 200)!;
+      expect(d.observations, isEmpty);
+      expect(d.rippleCvPct, lessThan(0.5));
+    });
+
+    test('sem exposição não há diagnóstico', () {
+      final t = [for (var i = 0; i < 500; i++) i * 0.1];
+      expect(diagnoseWave(t, List.filled(500, 0.0)), isNull);
+    });
+  });
 }

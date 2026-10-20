@@ -48,11 +48,18 @@ class BackupException implements Exception {
 /// Versão 4 = gerador (tecnologia, fabricante, modelo, potência, limites),
 ///            foto, identificação da sessão, corrente máxima, indicadores de
 ///            qualidade, sonda/calibração e observações do técnico.
+/// Versão 5 = perfis de gerador (faixas, estações, critério com origem e
+///            versão — inclui SAWAE ALTUS), tubo, observações do equipamento,
+///            origem do SET (app/instrumento), kV como metadado e cadastro
+///            de instrumentos (firmware, bateria, modo, calibração).
 class XDatabase {
-  static const schemaVersion = 4;
+  static const schemaVersion = 5;
 
   /// Tabelas na ordem segura para inserir (respeita as chaves estrangeiras).
-  static const tables = ['equipment', 'sessions', 'readings', 'notes', 'sync_state', 'settings', 'audit_log'];
+  static const tables = [
+    'generator_profiles', 'equipment', 'sessions', 'readings', 'notes', //
+    'sync_state', 'instruments', 'settings', 'audit_log',
+  ];
 
   final Database db;
   XDatabase(this.db);
@@ -68,11 +75,13 @@ class XDatabase {
           await _createV2(d);
           await _upgradeV2toV3(d);
           await _upgradeV3toV4(d);
+          await _upgradeV4toV5(d);
         },
         onUpgrade: (d, oldV, newV) async {
           if (oldV < 2) await _migrateV1toV2(d);
           if (oldV < 3) await _upgradeV2toV3(d);
           if (oldV < 4) await _upgradeV3toV4(d);
+          if (oldV < 5) await _upgradeV4toV5(d);
         },
       ),
     );
@@ -218,6 +227,47 @@ class XDatabase {
       WHERE id = '$seedEquipmentId' AND NOT EXISTS (
         SELECT 1 FROM audit_log WHERE entity_id = '$seedEquipmentId' AND details LIKE '%generator_type%')''');
     await _createProtection(d);
+  }
+
+  /// V5: perfis de gerador, tubo, origem do SET, kV (metadado), instrumentos.
+  static Future<void> _upgradeV4toV5(DatabaseExecutor d) async {
+    await d.execute('''CREATE TABLE generator_profiles (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, maker TEXT, model TEXT,
+      generator_type TEXT NOT NULL, power_kw REAL, inverter_khz REAL,
+      ma_stations TEXT, min_ma REAL, max_ma REAL, min_ms REAL, max_ms REAL,
+      min_mas REAL, max_mas REAL,
+      tol_ma_pct REAL NOT NULL, tol_ms_pct REAL NOT NULL, tol_mas_pct REAL NOT NULL,
+      tol_mas_abs REAL NOT NULL DEFAULT 0, alert_fraction REAL NOT NULL,
+      tol_origin TEXT, tol_version TEXT, tubes TEXT,
+      builtin INTEGER NOT NULL DEFAULT 0, notes TEXT,
+      created_at TEXT, updated_at TEXT)''');
+    for (final c in ['profile_id TEXT', 'tube_maker TEXT', 'tube_model TEXT', 'notes TEXT']) {
+      await d.execute('ALTER TABLE equipment ADD COLUMN $c');
+    }
+    for (final c in ["set_origin TEXT NOT NULL DEFAULT 'app'", 'set_changed_at TEXT', 'tube_model TEXT', 'kv_info TEXT']) {
+      await d.execute('ALTER TABLE sessions ADD COLUMN $c');
+    }
+    for (final c in ['tol_mas_abs REAL', 'tol_origin TEXT', 'profile_id TEXT']) {
+      await d.execute('ALTER TABLE readings ADD COLUMN $c');
+    }
+    await d.execute('''CREATE TABLE instruments (
+      device_id TEXT PRIMARY KEY, firmware TEXT, model TEXT, protocol INTEGER,
+      battery_pct REAL, charging INTEGER, mode TEXT, transport TEXT,
+      calibration TEXT, alerts TEXT, simulated INTEGER, last_seen TEXT NOT NULL)''');
+
+    // Perfis genéricos herdam as tolerâncias configuradas na V1.7/1.8:
+    // HF e "a identificar" ← tolerância HF; convencionais ← tolerância conv.
+    final rows = await d.query('settings');
+    final st = AppSettings.fromMap({for (final r in rows) r['key'].toString(): r['value'].toString()});
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final t in GeneratorType.values) {
+      final p = BuiltinProfiles.generic(t, st.tolFor(t));
+      await d.insert('generator_profiles', {...p.toMap(), 'created_at': now, 'updated_at': now},
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+    await d.insert('generator_profiles',
+        {...BuiltinProfiles.sawaeAltus.toMap(), 'created_at': now, 'updated_at': now},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   /// Gatilhos do banco: medições reais e o registro de alterações não podem
@@ -434,6 +484,8 @@ class XDatabase {
           'set_ms': ms,
           'set_pending': 1,
           'started_at': now,
+          'set_origin': 'app',
+          'set_changed_at': now,
         });
         await _audit(txn, 'nova sessao', 'sessao', id, {
           'motivo': 'SET alterado após medições',
@@ -443,8 +495,17 @@ class XDatabase {
         result = SetChange(id, true);
       } else {
         await txn.update(
-            'sessions', {'set_ma': ma, 'set_ms': ms, 'set_pending': 1, 'set_confirmed_at': null},
-            where: 'id = ?', whereArgs: [current.id]);
+            'sessions',
+            {
+              'set_ma': ma,
+              'set_ms': ms,
+              'set_pending': 1,
+              'set_confirmed_at': null,
+              'set_origin': 'app',
+              'set_changed_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [current.id]);
         await _audit(txn, 'SET alterado', 'sessao', current.id, {
           'antes': '${fmt(current.setMa)} mA / ${fmt(current.setMs)} ms',
           'depois': '${fmt(ma)} mA / ${fmt(ms)} ms',
@@ -496,6 +557,136 @@ class XDatabase {
       await _audit(txn, 'foto alterada', 'equipamento', equipmentId);
     });
   }
+
+  // ---------------- Perfis de gerador ----------------
+
+  Future<List<GeneratorProfile>> profiles() async {
+    final rows = await db.query('generator_profiles', orderBy: 'builtin DESC, name');
+    return rows.map(GeneratorProfile.fromMap).toList();
+  }
+
+  Future<GeneratorProfile?> profile(String id) async {
+    final rows = await db.query('generator_profiles', where: 'id = ?', whereArgs: [id]);
+    return rows.isEmpty ? null : GeneratorProfile.fromMap(rows.single);
+  }
+
+  /// Perfil do equipamento: o escolhido no cadastro ou o genérico do tipo.
+  static Future<GeneratorProfile?> _profileForEquipment(DatabaseExecutor d, String equipmentId) async {
+    final eq = await d.query('equipment',
+        columns: ['profile_id', 'generator_type'], where: 'id = ?', whereArgs: [equipmentId]);
+    if (eq.isEmpty) return null;
+    final pid = eq.single['profile_id']?.toString();
+    final type = GeneratorTypeInfo.fromCode(eq.single['generator_type']?.toString());
+    for (final id in [if (pid != null && pid.isNotEmpty) pid, BuiltinProfiles.genericId(type)]) {
+      final rows = await d.query('generator_profiles', where: 'id = ?', whereArgs: [id]);
+      if (rows.isNotEmpty) return GeneratorProfile.fromMap(rows.single);
+    }
+    return null;
+  }
+
+  Future<GeneratorProfile?> profileForEquipment(String equipmentId) => _profileForEquipment(db, equipmentId);
+
+  Future<void> saveProfile(GeneratorProfile p) async {
+    await db.transaction((txn) async {
+      final now = DateTime.now().toUtc().toIso8601String();
+      final prev = await txn.query('generator_profiles', where: 'id = ?', whereArgs: [p.id]);
+      if (prev.isEmpty) {
+        await txn.insert('generator_profiles', {...p.toMap(), 'created_at': now, 'updated_at': now});
+        await _audit(txn, 'criado', 'perfil', p.id, {'perfil': p.name, 'criterio': p.tolerances.description});
+      } else {
+        await txn.update('generator_profiles', {...p.toMap(), 'updated_at': now}, where: 'id = ?', whereArgs: [p.id]);
+        await _audit(txn, 'alterado', 'perfil', p.id, {
+          'perfil': p.name,
+          'criterio': p.tolerances.description,
+          'origem': p.tolerances.originText,
+        });
+      }
+    });
+  }
+
+  /// Exclui um perfil criado pelo usuário que não esteja em uso.
+  Future<bool> deleteProfile(String id) async {
+    final p = await profile(id);
+    if (p == null || p.builtin) return false;
+    final used = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM equipment WHERE profile_id = ?', [id])) ??
+        0;
+    if (used > 0) return false;
+    await db.transaction((txn) async {
+      await txn.delete('generator_profiles', where: 'id = ?', whereArgs: [id]);
+      await _audit(txn, 'excluido', 'perfil', id, {'perfil': p.name});
+    });
+    return true;
+  }
+
+  // ---------------- Sessões: metadados e SET do instrumento ----------------
+
+  Future<List<MeasureSession>> sessions(String equipmentId) async {
+    final rows = await db.query('sessions',
+        where: 'equipment_id = ?', whereArgs: [equipmentId], orderBy: 'started_at DESC, rowid DESC');
+    return rows.map(MeasureSession.fromMap).toList();
+  }
+
+  /// Tubo e kV usados no teste (kV é só metadado informado pelo técnico).
+  Future<void> updateSessionMeta(String sessionId, {String? tubeModel, String? kvInfo}) async {
+    String? clean(String? v) => (v == null || v.trim().isEmpty) ? null : v.trim();
+    await db.transaction((txn) async {
+      await txn.update('sessions', {'tube_model': clean(tubeModel), 'kv_info': clean(kvInfo)},
+          where: 'id = ?', whereArgs: [sessionId]);
+      await _audit(txn, 'metadados da sessao', 'sessao', sessionId,
+          {'tubo': clean(tubeModel) ?? '—', 'kV (informado)': clean(kvInfo) ?? '—'});
+    });
+  }
+
+  /// O técnico alterou o SET no display do instrumento (MODO LOCAL).
+  /// Abre/atualiza a sessão com origem "instrumento". Devolve o id da sessão.
+  Future<String> adoptInstrumentSet(String equipmentId, String deviceId, double ma, double ms,
+      {String? deviceSessionId, DateTime? changedAt}) async {
+    late String id;
+    await db.transaction((txn) async {
+      final when = (changedAt ?? DateTime.now()).toUtc().toIso8601String();
+      final existing = deviceSessionId == null
+          ? <Map<String, Object?>>[]
+          : await txn.query('sessions', where: 'id = ?', whereArgs: [deviceSessionId]);
+      if (existing.isNotEmpty) {
+        id = deviceSessionId!;
+        final used = Sqflite.firstIntValue(
+                await txn.rawQuery('SELECT COUNT(*) FROM readings WHERE session_id = ?', [id])) ??
+            0;
+        if (used == 0) {
+          await txn.update(
+              'sessions',
+              {'set_ma': ma, 'set_ms': ms, 'set_pending': 0, 'set_origin': 'instrumento', 'set_changed_at': when},
+              where: 'id = ?',
+              whereArgs: [id]);
+        }
+      } else {
+        id = deviceSessionId ?? newId('ses');
+        await txn.insert('sessions', {
+          'id': id,
+          'equipment_id': equipmentId,
+          'set_ma': ma,
+          'set_ms': ms,
+          'set_pending': 0,
+          'device_id': deviceId,
+          'started_at': DateTime.now().toUtc().toIso8601String(),
+          'label': 'SET alterado no instrumento',
+          'set_origin': 'instrumento',
+          'set_changed_at': when,
+        });
+      }
+      await _audit(txn, 'SET do instrumento', 'sessao', id,
+          {'instrumento': deviceId, 'set': '${fmt(ma)} mA / ${fmt(ms)} ms', 'origem': 'display do instrumento'});
+    });
+    return id;
+  }
+
+  Future<void> upsertInstrument(Map<String, Object?> info) async {
+    await db.insert('instruments', {...info, 'last_seen': DateTime.now().toUtc().toIso8601String()},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<Map<String, Object?>>> instruments() => db.query('instruments', orderBy: 'last_seen DESC');
 
   // ---------------- Observações ----------------
 
@@ -550,7 +741,9 @@ class XDatabase {
         'tol_ma': t.maPct,
         'tol_ms': t.msPct,
         'tol_mas': t.masPct,
+        'tol_mas_abs': t.masAbs,
         'alert_fraction': t.alertFraction,
+        'tol_origin': t.originText.isEmpty ? null : t.originText,
       };
 
   /// Grava as leituras recebidas do instrumento numa única transação.
@@ -564,8 +757,8 @@ class XDatabase {
   /// identifica como simulador) são gravados como source='simulator' e
   /// aparecem sempre como SIMULADOR, nunca como medição real.
   Future<MergeResult> mergeDeviceReadings(
-      String deviceId, int nextCursor, List<dynamic> items, Tolerances tol,
-      {bool deviceSimulated = false, Tolerances? convTol}) async {
+      String deviceId, int nextCursor, List<dynamic> items, Tolerances fallbackTol,
+      {bool deviceSimulated = false, String? fallbackEquipmentId}) async {
     var inserted = 0, duplicates = 0, rejected = 0;
     await db.transaction((txn) async {
       for (final raw in items) {
@@ -576,12 +769,10 @@ class XDatabase {
         final r = Map<String, dynamic>.from(raw);
         final shotId = r['shot_id']?.toString();
         final sessionId = r['session_id']?.toString();
-        if (shotId == null || shotId.isEmpty || sessionId == null || r['quality'] != 'valid') {
-          rejected++;
-          continue;
-        }
-        final ses = await txn.query('sessions', where: 'id = ?', whereArgs: [sessionId]);
-        if (ses.isEmpty) {
+        final q = r['quality']?.toString();
+        // 'out_of_range' e 'saturated' são REGISTRADOS (como inválidos);
+        // qualquer outra qualidade desconhecida é rejeitada.
+        if (shotId == null || shotId.isEmpty || sessionId == null || !const {'valid', 'out_of_range', 'saturated'}.contains(q)) {
           rejected++;
           continue;
         }
@@ -590,6 +781,33 @@ class XDatabase {
           if (v is! num) return null;
           final d = v.toDouble();
           return d.isFinite && d >= 0 ? d : null;
+        }
+
+        var ses = await txn.query('sessions', where: 'id = ?', whereArgs: [sessionId]);
+        if (ses.isEmpty) {
+          // MODO LOCAL: o técnico configurou o SET no display do instrumento.
+          // A sessão do instrumento é criada no equipamento selecionado.
+          final sm = val('set_ma'), ss = val('set_ms');
+          if (fallbackEquipmentId == null || sm == null || ss == null || sm <= 0 || ss <= 0) {
+            rejected++;
+            continue;
+          }
+          await txn.insert('sessions', {
+            'id': sessionId,
+            'equipment_id': fallbackEquipmentId,
+            'set_ma': sm,
+            'set_ms': ss,
+            'set_pending': 0,
+            'device_id': deviceId,
+            'started_at': DateTime.tryParse(r['recorded_at']?.toString() ?? '')?.toUtc().toIso8601String() ??
+                DateTime.now().toUtc().toIso8601String(),
+            'label': 'Modo local do instrumento $deviceId',
+            'set_origin': 'instrumento',
+            'set_changed_at': DateTime.now().toUtc().toIso8601String(),
+          });
+          await _audit(txn, 'sessao do modo local', 'sessao', sessionId,
+              {'instrumento': deviceId, 'set': '${fmt(sm)} mA / ${fmt(ss)} ms'});
+          ses = await txn.query('sessions', where: 'id = ?', whereArgs: [sessionId]);
         }
 
         final setMa = val('set_ma') ?? (ses.single['set_ma'] as num).toDouble();
@@ -601,30 +819,24 @@ class XDatabase {
           rejected++;
           continue;
         }
-        // Tolerância conforme o tipo de gerador do equipamento da sessão.
-        var applied = tol;
-        if (convTol != null) {
-          final eq = await txn.query('equipment',
-              columns: ['generator_type'], where: 'id = ?', whereArgs: [ses.single['equipment_id']]);
-          if (eq.isNotEmpty &&
-              GeneratorTypeInfo.fromCode(eq.single['generator_type']?.toString()).isConventional) {
-            applied = convTol;
-          }
-        }
-        final ev = evaluate(
-            setMa: setMa, setMs: setMs, readMa: readMa, readMs: readMs, readMas: readMas, tol: applied);
         final existing = await txn.query('readings',
-            columns: ['uid'],
-            where: 'device_id = ? AND shot_id = ?',
-            whereArgs: [deviceId, shotId]);
+            columns: ['uid'], where: 'device_id = ? AND shot_id = ?', whereArgs: [deviceId, shotId]);
         if (existing.isNotEmpty) {
           duplicates++;
           continue;
         }
+        final equipmentId = ses.single['equipment_id'].toString();
+        final profile = await _profileForEquipment(txn, equipmentId);
+        final applied = profile?.tolerances ?? fallbackTol;
         final wf = Waveform.tryParse(r['waveform']);
         final quality = <String>[
           if (r['flags'] is List) ...(r['flags'] as List).map((e) => e.toString()),
+          if (q == 'saturated') 'saturated',
         ];
+        // Fora da faixa do instrumento: registrado SEM truncar, como inválido.
+        if (q == 'out_of_range' || InstrumentRange.check(readMa, readMs, readMas) != null) {
+          quality.add('fora_da_faixa');
+        }
         // Conferência independente: o app integra a forma de onda recebida
         // (trapézios) e sinaliza divergência maior que 2 % no mAs.
         if (wf != null) {
@@ -633,12 +845,17 @@ class XDatabase {
             quality.add('verificacao_mas_divergente');
           }
         }
+        var ev = evaluate(
+            setMa: setMa, setMs: setMs, readMa: readMa, readMs: readMs, readMas: readMas, tol: applied);
+        if (quality.any(Reading.invalidFlags.contains)) {
+          ev = Evaluation(ev.errMa, ev.errMs, ev.errMas, MeasureStatus.invalid);
+        }
         await txn.insert('readings', {
           'uid': newId('rd'),
           'device_id': deviceId,
           'shot_id': shotId,
           'session_id': sessionId,
-          'equipment_id': ses.single['equipment_id'],
+          'equipment_id': equipmentId,
           'source': (deviceSimulated || r['simulated'] == true) ? 'simulator' : 'device',
           'set_ma': setMa,
           'set_ms': setMs,
@@ -650,10 +867,10 @@ class XDatabase {
           'err_mas': ev.errMas,
           'status': ev.status.code,
           'waveform': wf?.toJson(),
-          'recorded_at':
-              DateTime.tryParse(r['recorded_at']?.toString() ?? '')?.toUtc().toIso8601String(),
+          'recorded_at': DateTime.tryParse(r['recorded_at']?.toString() ?? '')?.toUtc().toIso8601String(),
           'received_at': DateTime.now().toUtc().toIso8601String(),
           ..._tolColumns(applied),
+          'profile_id': profile?.id,
           'ma_peak': val('ma_peak'),
           'quality': quality.isEmpty ? null : jsonEncode(quality),
           'probe_id': r['probe_id']?.toString(),
@@ -689,6 +906,7 @@ class XDatabase {
     required Tolerances tol,
     double? maPeak,
     List<String> quality = const [],
+    String? profileId,
   }) async {
     final ev = evaluate(
         setMa: session.setMa,
@@ -723,6 +941,7 @@ class XDatabase {
       'quality': quality.isEmpty ? null : jsonEncode(quality),
       'probe_id': 'DEMO',
       'cal_status': 'simulado',
+      'profile_id': profileId,
     };
     await db.insert('readings', map);
     return Reading.fromMap(map);
@@ -799,6 +1018,18 @@ class XDatabase {
       }
       for (final r in keepToken) {
         await txn.insert('settings', r, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      // Backups anteriores à V5 não têm perfis: recria os do aplicativo.
+      final st = AppSettings.fromMap({
+        for (final r in await txn.query('settings')) r['key'].toString(): r['value'].toString(),
+      });
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (final p in [
+        for (final t in GeneratorType.values) BuiltinProfiles.generic(t, st.tolFor(t)),
+        BuiltinProfiles.sawaeAltus,
+      ]) {
+        await txn.insert('generator_profiles', {...p.toMap(), 'created_at': now, 'updated_at': now},
+            conflictAlgorithm: ConflictAlgorithm.ignore);
       }
       await _createProtection(txn);
       await _audit(txn, 'backup restaurado', 'banco', null, {

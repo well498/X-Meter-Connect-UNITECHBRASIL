@@ -325,10 +325,10 @@ void main() {
       updatedAt: DateTime.now(),
     ));
     expect((await db.equipment(e.id))!.generatorType, GeneratorType.threePhase6p);
-    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances(masPct: 10),
-        convTol: const Tolerances(masPct: 5));
+    await db.saveProfile(BuiltinProfiles.generic(GeneratorType.threePhase6p, const Tolerances(masPct: 5)));
+    await db.mergeDeviceReadings('XM-1', 1, [shot('1')], const Tolerances(masPct: 10));
     final r = (await db.readings()).single;
-    expect(r.tolerances!.masPct, 5, reason: 'convencional usa a tolerância própria');
+    expect(r.tolerances!.masPct, 5, reason: 'usa o critério do perfil do tipo do equipamento');
     await db.db.close();
   });
 
@@ -421,6 +421,134 @@ void main() {
     final db = await open();
     final id = await db.newSession(seedEquipmentId, label: 'Aferição anual');
     expect((await db.session(id))!.label, 'Aferição anual');
+    await db.db.close();
+  });
+
+  test('v5: perfis do aplicativo, incluindo SAWAE ALTUS ST 543-HF', () async {
+    final db = await open();
+    final ps = await db.profiles();
+    expect(ps.where((p) => p.id.startsWith('perfil-generico')), hasLength(5));
+    final sawae = (await db.profile(BuiltinProfiles.sawaeAltusId))!;
+    expect(sawae.maStations, [80, 100, 125, 160, 200, 250, 320, 400, 500, 630]);
+    expect(sawae.limits.minMa, 80);
+    expect(sawae.limits.maxMa, 630);
+    expect(sawae.limits.minMas, 0.4);
+    expect(sawae.limits.maxMas, 500);
+    expect(sawae.powerKw, 54);
+    expect(sawae.inverterKhz, 36);
+    expect(sawae.type, GeneratorType.highFrequency);
+    expect(sawae.tubes, ['Toshiba E7242FX', 'Toshiba E7252FX', 'Siemens Ray8', 'Siemens Ray12']);
+    expect(sawae.tolerances.masRule, '±(10 % + 0,2 mAs)');
+    expect(sawae.tolerances.origin, contains('ALTUS'));
+    expect(sawae.tolerances.origin, contains('rev. 19'));
+    expect(await db.deleteProfile(sawae.id), isFalse, reason: 'perfil do aplicativo não é excluído');
+    await db.db.close();
+  });
+
+  Future<void> useSawae(XDatabase db) async {
+    final e = (await db.equipment(seedEquipmentId))!;
+    await db.saveEquipment(Equipment(
+      id: e.id,
+      manufacturer: 'SAWAE',
+      model: 'ALTUS',
+      generatorType: GeneratorType.highFrequency,
+      profileId: BuiltinProfiles.sawaeAltusId,
+      tubeMaker: 'Toshiba',
+      tubeModel: 'E7242FX',
+      createdAt: e.createdAt,
+      updatedAt: DateTime.now(),
+    ));
+  }
+
+  test('v5: medição avaliada pelo critério SAWAE (17,8 a 22,2 mAs para 20 mAs)', () async {
+    final db = await open();
+    await useSawae(db);
+    await db.mergeDeviceReadings('XM-1', 3, [
+      shot('ok', mas: 22.2),
+      shot('limite', mas: 17.8),
+      shot('fora', mas: 22.5),
+    ], const Tolerances());
+    final rs = {for (final r in await db.readings()) r.shotId: r};
+    expect(rs['ok']!.status, isNot(MeasureStatus.failed));
+    expect(rs['limite']!.status, isNot(MeasureStatus.failed));
+    expect(rs['fora']!.status, MeasureStatus.failed);
+    final t = rs['ok']!.tolerances!;
+    expect(t.masAbs, 0.2);
+    expect(t.origin, contains('ALTUS'), reason: 'origem e versão do critério ficam gravadas');
+    expect(rs['ok']!.profileId, BuiltinProfiles.sawaeAltusId);
+    expect((await db.equipment(seedEquipmentId))!.tubeModel, 'E7242FX');
+    await db.db.close();
+  });
+
+  test('v5: leitura fora da faixa é registrada sem truncar e marcada como inválida', () async {
+    final db = await open();
+    await db.mergeDeviceReadings('XM-1', 2, [
+      {...shot('x', mas: 2500), 'quality': 'out_of_range', 'read_ma': 1250.0, 'read_ms': 2000.0},
+      {...shot('y', mas: 2100)},
+    ], const Tolerances());
+    final rs = {for (final r in await db.readings()) r.shotId: r};
+    expect(rs['x']!.readMas, 2500, reason: 'valor não é truncado');
+    expect(rs['x']!.status, MeasureStatus.invalid);
+    expect(rs['x']!.quality, contains('fora_da_faixa'));
+    expect(rs['y']!.status, MeasureStatus.invalid, reason: 'acima de 2000 mAs mesmo sem a marca do firmware');
+    expect(evaluateReading(rs['y']!, const Tolerances()).status, MeasureStatus.invalid);
+    await db.db.close();
+  });
+
+  test('v5: medições do MODO LOCAL criam a sessão do instrumento', () async {
+    final db = await open();
+    final m = await db.mergeDeviceReadings('XM-1', 2, [
+      {...shot('L1'), 'session_id': 'local-123', 'set_ma': 100, 'set_ms': 50, 'read_mas': 5.0},
+      {...shot('L2'), 'session_id': 'local-123', 'set_ma': 100, 'set_ms': 50, 'read_mas': 5.1},
+    ], const Tolerances(), fallbackEquipmentId: seedEquipmentId);
+    expect(m.inserted, 2);
+    final ses = (await db.session('local-123'))!;
+    expect(ses.setOrigin, 'instrumento');
+    expect(ses.setMa, 100);
+    expect(ses.equipmentId, seedEquipmentId);
+    // Sem equipamento de destino, sessão desconhecida continua rejeitada.
+    final r = await db.mergeDeviceReadings('XM-1', 3, [
+      {...shot('L3'), 'session_id': 'outra'}
+    ], const Tolerances());
+    expect(r.rejected, 1);
+    await db.db.close();
+  });
+
+  test('v5: SET alterado no instrumento é adotado com a origem registrada', () async {
+    final db = await open();
+    final id = await db.adoptInstrumentSet(seedEquipmentId, 'XM-1', 320, 10, deviceSessionId: 'dev-ses-1');
+    expect(id, 'dev-ses-1');
+    final cur = (await db.currentSession(seedEquipmentId))!;
+    expect(cur.id, 'dev-ses-1');
+    expect(cur.setOrigin, 'instrumento');
+    expect(cur.setMas, closeTo(3.2, 1e-9));
+    final ch = await db.changeSet(seedEquipmentId, 200, 100);
+    expect((await db.session(ch.sessionId))!.setOrigin, 'app');
+    await db.db.close();
+  });
+
+  test('v5: tubo e kV do teste ficam na sessão (kV só como metadado)', () async {
+    final db = await open();
+    await db.updateSessionMeta(seedSessionId, tubeModel: 'Siemens Ray8', kvInfo: '70 kV');
+    final ses = (await db.session(seedSessionId))!;
+    expect(ses.tubeModel, 'Siemens Ray8');
+    expect(ses.kvInfo, '70 kV');
+    await db.db.close();
+  });
+
+  test('v5: perfil criado pelo usuário com origem própria', () async {
+    final db = await open();
+    await db.saveProfile(GeneratorProfile(
+      id: 'perfil-teste',
+      name: 'Gerador X',
+      type: GeneratorType.threePhase12p,
+      maStations: const [50, 100, 200],
+      tolerances: const Tolerances(masPct: 8, origin: 'Procedimento interno UNITECH', version: '2'),
+    ));
+    final p = (await db.profile('perfil-teste'))!;
+    expect(p.maStations, [50, 100, 200]);
+    expect(p.tolerances.originText, 'Procedimento interno UNITECH, versão 2');
+    expect(await db.deleteProfile('perfil-teste'), isTrue);
     await db.db.close();
   });
 }

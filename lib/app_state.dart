@@ -39,6 +39,13 @@ class AppState extends ChangeNotifier {
   AppSettings settings = const AppSettings();
   List<Equipment> equipments = [];
   List<Equipment> archivedEquipments = [];
+
+  /// Perfis de gerador e o perfil do equipamento selecionado.
+  List<GeneratorProfile> profiles = [];
+  GeneratorProfile? profile;
+
+  /// Último estado informado pelo instrumento (bateria, modo, alertas…).
+  DeviceInfo? deviceInfo;
   Equipment? selected;
   MeasureSession? session;
   List<Reading> readings = [];
@@ -61,10 +68,33 @@ class AppState extends ChangeNotifier {
   bool _io = false;
   bool _disposed = false;
 
-  GeneratorType get generatorType => selected?.generatorType ?? GeneratorType.highFrequency;
+  GeneratorType get generatorType => selected?.generatorType ?? GeneratorType.unknown;
 
   /// Tolerância do tipo de gerador do equipamento selecionado.
-  Tolerances get tol => settings.tolFor(generatorType);
+  Tolerances get tol => profile?.tolerances ?? settings.tolFor(generatorType);
+
+  GeneratorProfile? profileOf(Equipment e) =>
+      firstOrNull(profiles.where((p) => p.id == e.profileId)) ??
+      firstOrNull(profiles.where((p) => p.id == BuiltinProfiles.genericId(e.generatorType)));
+
+  /// Limites efetivos: manual do equipamento > perfil > referência do tipo.
+  GeneratorLimits limitsOf(Equipment e) {
+    final base = profileOf(e)?.limits ?? e.generatorType.referenceLimits;
+    return GeneratorLimits(e.minMa ?? base.minMa, e.maxMa ?? base.maxMa, e.minMs ?? base.minMs,
+        e.maxMs ?? base.maxMs, e.maxMas ?? base.maxMas,
+        minMas: base.minMas);
+  }
+
+  /// Estações das setas ▲▼ (do perfil, quando definidas) dentro dos limites.
+  List<double> maStationsOf(Equipment e) {
+    final l = limitsOf(e);
+    return stepsWithin(profileOf(e)?.maStations ?? e.generatorType.maSteps, l.minMa, l.maxMa);
+  }
+
+  List<double> msStationsOf(Equipment e) {
+    final l = limitsOf(e);
+    return stepsWithin(e.generatorType.msSteps, l.minMs, l.maxMs);
+  }
   bool get connected => link == LinkState.connected;
 
   List<Reading> get sessionReadings =>
@@ -73,7 +103,7 @@ class AppState extends ChangeNotifier {
   Reading? get latest => firstOrNull(sessionReadings);
 
   /// Limites efetivos do equipamento selecionado.
-  GeneratorLimits get limits => selected?.limits ?? generatorType.referenceLimits;
+  GeneratorLimits get limits => selected == null ? generatorType.referenceLimits : limitsOf(selected!);
 
   /// Avalia com a tolerância gravada na própria medição (rastreabilidade).
   Evaluation evalOf(Reading r) => evaluateReading(r, tol);
@@ -94,10 +124,12 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> reload() async {
+    profiles = await db.profiles();
     equipments = await db.equipments();
     archivedEquipments = await db.equipments(archived: true);
     selected = firstOrNull(equipments.where((e) => e.id == settings.selectedEquipmentId)) ??
         firstOrNull(equipments);
+    profile = selected == null ? null : profileOf(selected!);
     if (selected != null) {
       session = await db.currentSession(selected!.id);
       readings = await db.readings(equipmentId: selected!.id);
@@ -158,7 +190,7 @@ class AppState extends ChangeNotifier {
     if (s == null) return 'Selecione um equipamento';
     if (ma == null || ms == null) return 'Informe mA e tempo numéricos';
     if (ma <= 0 || ms <= 0) return 'mA e tempo devem ser maiores que zero';
-    final limitError = selected?.limits.check(ma, ms);
+    final limitError = selected == null ? null : limitsOf(selected!).check(ma, ms);
     if (limitError != null) return limitError;
     if (ma == s.setMa && ms == s.setMs) {
       _say('SET sem alteração');
@@ -202,6 +234,7 @@ class AppState extends ChangeNotifier {
       _api = api;
       _onConnected(info);
       await _guarded(() async {
+        await _refreshStatus();
         await _sendPendingSet();
         await _syncAll();
       });
@@ -214,6 +247,8 @@ class AppState extends ChangeNotifier {
   }
 
   void _onConnected(DeviceInfo info) {
+    deviceInfo = info;
+    db.upsertInstrument(info.toDbMap());
     deviceId = info.deviceId;
     firmware = info.firmware;
     deviceSimulated = info.simulated;
@@ -242,6 +277,7 @@ class AppState extends ChangeNotifier {
     if (_io || link != LinkState.connected) return;
     try {
       await _guarded(() async {
+        await _refreshStatus();
         await _sendPendingSet();
         await _syncAll();
       });
@@ -324,6 +360,38 @@ class AppState extends ChangeNotifier {
     _say('SET ${fmt(s.setMa, 0)} mA / ${fmt(s.setMs, 0)} ms confirmado pelo instrumento $dev');
   }
 
+  /// Estado do instrumento (bateria, modo, alertas) e SET configurado nele.
+  /// Se o técnico mudou o SET no display (MODO LOCAL), o aplicativo adota
+  /// esse SET e registra a origem "instrumento".
+  Future<void> _refreshStatus() async {
+    final api = _api;
+    final dev = deviceId;
+    final eq = selected;
+    if (api == null || dev == null) return;
+    final info = await api.identity();
+    final alertsChanged = info.alerts.join('|') != (deviceInfo?.alerts.join('|') ?? '');
+    deviceInfo = info;
+    await db.upsertInstrument(info.toDbMap());
+    if (alertsChanged && info.alerts.isNotEmpty) _say('Alerta do instrumento: ${info.alerts.join('; ')}');
+    final ds = await api.deviceSet();
+    final ses = session;
+    if (ds == null || eq == null || ses == null || ds.origin != 'instrumento') return;
+    final same = ds.ma == ses.setMa && ds.ms == ses.setMs && (ds.sessionId == null || ds.sessionId == ses.id);
+    if (same) return;
+    final known = ses.setChangedAt;
+    if (known != null && ds.changedAt != null && !ds.changedAt!.isAfter(known)) return;
+    await db.adoptInstrumentSet(eq.id, dev, ds.ma, ds.ms, deviceSessionId: ds.sessionId, changedAt: ds.changedAt);
+    await reload();
+    _say('SET alterado no instrumento (modo local): ${fmtTrim(ds.ma)} mA × ${fmtTrim(ds.ms)} ms');
+  }
+
+  /// Atualiza o estado do instrumento sob demanda (tela Conectividade).
+  Future<void> refreshInstrument() async {
+    if (!connected) return;
+    await _guarded(_refreshStatus);
+    _notify();
+  }
+
   Future<void> _syncAll() async {
     final api = _api;
     final dev = deviceId;
@@ -333,8 +401,8 @@ class AppState extends ChangeNotifier {
       final cursor = await db.cursor(dev);
       final res = await api.readings(cursor);
       if (res.deviceId != dev) throw const MeterException('Instrumento trocado durante a sincronização');
-      final m = await db.mergeDeviceReadings(dev, res.nextCursor, res.items, settings.tolerances,
-          deviceSimulated: deviceSimulated, convTol: settings.tolerancesConv);
+      final m = await db.mergeDeviceReadings(dev, res.nextCursor, res.items, tol,
+          deviceSimulated: deviceSimulated, fallbackEquipmentId: selected?.id);
       total += m.inserted;
       dup += m.duplicates;
       rej += m.rejected;
@@ -469,6 +537,7 @@ class AppState extends ChangeNotifier {
       tol: tol,
       maPeak: ex.peakMa,
       quality: ex.flags.map((f) => f.code).toList(),
+      profileId: profile?.id,
     );
     hiddenReadingUid = null;
     await reload();
@@ -507,6 +576,29 @@ class AppState extends ChangeNotifier {
   Reading? get displayed {
     final r = latest;
     return (r == null || r.uid == hiddenReadingUid) ? null : r;
+  }
+
+  // ---------------- Perfis e metadados ----------------
+
+  Future<void> saveProfile(GeneratorProfile p) async {
+    await db.saveProfile(p);
+    await reload();
+    _say('Perfil salvo: ${p.name}');
+  }
+
+  Future<bool> deleteProfile(String id) async {
+    final ok = await db.deleteProfile(id);
+    await reload();
+    _say(ok ? 'Perfil excluído' : 'Perfil em uso ou do aplicativo: não pode ser excluído');
+    return ok;
+  }
+
+  Future<void> updateSessionMeta({String? tubeModel, String? kvInfo}) async {
+    final s = session;
+    if (s == null) return;
+    await db.updateSessionMeta(s.id, tubeModel: tubeModel, kvInfo: kvInfo);
+    await reload();
+    _say('Dados do teste salvos');
   }
 
   // ---------------- Observações e foto ----------------

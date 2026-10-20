@@ -14,6 +14,7 @@ String qualityLabel(String code) {
   }
   return switch (code) {
     'verificacao_mas_divergente' => 'mAs do instrumento difere > 2 % da integração da forma de onda',
+    'fora_da_faixa' => 'FORA DA FAIXA do instrumento (valor registrado sem truncar; medição inválida)',
     _ => code.replaceAll('_', ' '),
   };
 }
@@ -54,12 +55,17 @@ class MeasureTab extends StatelessWidget {
       );
     }
     final ev = s.evalOf(r);
+    final w = r.waveform;
+    final diag = w == null
+        ? null
+        : diagnoseWave(uniformTimes(w.ma.length, w.samplePeriodUs), w.ma, cfg: s.detection, setMa: r.setMa);
     final tol = r.tolerances ?? s.tol;
     final color = r.isDemo ? XColors.demo : XColors.status(ev.status);
     final statusText = switch (ev.status) {
       MeasureStatus.approved => 'Dentro da tolerância',
       MeasureStatus.alert => 'Alerta',
       MeasureStatus.failed => 'Fora da tolerância',
+      MeasureStatus.invalid => 'Medição inválida',
       MeasureStatus.unknown => 'Sem dados',
     };
     final readColor = r.isDemo ? XColors.demo : (ev.status == MeasureStatus.approved ? XColors.okText : color);
@@ -142,7 +148,8 @@ class MeasureTab extends StatelessWidget {
         );
 
     final right = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      kv('Tempo medido', fmt(r.readMs, r.readMs < 10 ? 2 : 1), 'ms', ev.errMs, tol.msPct),
+      kv('Tempo medido', fmtTime(r.readMs, seconds: s.settings.timeInSeconds),
+          s.settings.timeInSeconds ? 's' : 'ms', ev.errMs, tol.msPct),
       const Divider(height: 18),
       kv('Corrente média', fmt(r.readMa, 1), 'mA', ev.errMa, tol.maPct),
       if (r.maPeak != null) ...[
@@ -196,6 +203,8 @@ class MeasureTab extends StatelessWidget {
               SizedBox(
                 height: 230,
                 child: WaveChart(
+                  markers: diagMarkers(diag),
+                  plateauMa: diag?.plateauMa,
                   series: [WaveSeries(r.waveform!, r.isDemo ? XColors.demo : XColors.cyan, 'Disparo')],
                   referenceMa: r.setMa,
                 ),
@@ -203,6 +212,20 @@ class MeasureTab extends StatelessWidget {
             ]),
           ),
         ),
+      if (diag != null) ...[
+        const SizedBox(height: 12),
+        DiagnosticsCard(diag: diag, sawae: r.profileId == BuiltinProfiles.sawaeAltusId || s.profile?.id == BuiltinProfiles.sawaeAltusId),
+      ],
+      const SizedBox(height: 10),
+      Builder(builder: (context) {
+        final (lo, hi) = tol.masInterval(r.setMas);
+        return Text(
+          'Critério: ${tol.description}${tol.originText.isEmpty ? '' : ' — ${tol.originText}'}\n'
+          'Aceitação do mAs para ${fmt(r.setMas)} mAs: ${fmt(lo)} a ${fmt(hi)} mAs'
+          '${tol.maPct <= 0 || tol.msPct <= 0 ? '\nmA/tempo sem critério documentado: exibidos sem classificação.' : ''}',
+          style: const TextStyle(color: XColors.gray, fontSize: 13),
+        );
+      }),
       const SizedBox(height: 8),
       Wrap(spacing: 8, runSpacing: 6, children: [
         if (r.isDemo) DemoTag(label: r.sourceLabel),
@@ -211,7 +234,7 @@ class MeasureTab extends StatelessWidget {
         _chip(Icons.memory, r.isDemo ? r.deviceId : 'Instrumento ${r.deviceId}'),
         if (r.probeId != null) _chip(Icons.sensors, 'Sonda ${r.probeId}'),
         if (r.calStatus != null) _chip(Icons.verified_outlined, 'Calibração: ${r.calStatus}'),
-        _chip(Icons.rule, 'Tol. mAs ±${fmt(tol.masPct, 1)} %'),
+        _chip(Icons.rule, 'mAs ${tol.masRule}'),
         for (final q in r.quality) _chip(Icons.warning_amber_rounded, qualityLabel(q), color: XColors.warn),
       ]),
       for (final n in s.notes.where((n) => n.readingUid == r.uid))
@@ -252,3 +275,74 @@ class _Empty extends StatelessWidget {
 
 /// Reaproveitado por outras abas.
 String shotLabel(Reading r) => '${r.isDemo ? '[${r.sourceLabel}] ' : ''}${fmtDateTime(r.when)} • ${fmt(r.readMas)} mAs';
+
+
+/// Marcas de início, fim, pico inicial e pico máximo para o gráfico.
+List<ChartMarker> diagMarkers(WaveDiagnostics? d) => d == null
+    ? const []
+    : [
+        ChartMarker(d.startMs, 'início', XColors.okText),
+        ChartMarker(d.endMs, 'fim', XColors.fail),
+        ChartMarker(d.initialPeakTimeMs, 'pico inicial', XColors.warn, ma: d.initialPeakMa),
+        if ((d.peakTimeMs - d.initialPeakTimeMs).abs() > 0.001)
+          ChartMarker(d.peakTimeMs, 'máx.', XColors.cyan, ma: d.peakMa),
+      ];
+
+/// Indicadores da forma de onda — observações, nunca comandos de ajuste.
+class DiagnosticsCard extends StatelessWidget {
+  final WaveDiagnostics diag;
+  final bool sawae;
+  const DiagnosticsCard({super.key, required this.diag, this.sawae = false});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget item(String k, String v) => SizedBox(
+          width: 150,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(k, style: const TextStyle(color: XColors.gray, fontSize: 12)),
+            Text(v, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+          ]),
+        );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Diagnóstico da forma de onda',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 12, runSpacing: 10, children: [
+            item('Pico inicial', '${fmt(diag.initialPeakMa, 1)} mA (${fmtSigned(diag.overshootPct, 1)} %)'),
+            item('Corrente no patamar', '${fmt(diag.plateauMa, 1)} mA'),
+            item('Oscilação (CV)', '${fmt(diag.rippleCvPct, 2)} %'),
+            item('Estabilidade', '${fmtSigned(diag.driftPct, 2)} %'),
+            item('Tempo efetivo', '${fmt(diag.timeMs, 2)} ms'),
+            item('mAs integrado', fmt(diag.mas, 3)),
+          ]),
+          if (diag.observations.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (final o in diag.observations)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.info_outline, size: 16, color: XColors.warn),
+                  const SizedBox(width: 6),
+                  Expanded(child: Text(o, style: const TextStyle(fontSize: 13))),
+                ]),
+              ),
+          ],
+          if (sawae) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Referência do manual SAWAE ALTUS: a referência de PREPARO influencia o comportamento inicial e '
+              'o pico de partida; a referência de DISPARO influencia a amplitude da corrente durante a exposição e o mAs.',
+              style: TextStyle(color: XColors.gray, fontSize: 12),
+            ),
+          ],
+          const SizedBox(height: 6),
+          const Text('Indicadores para avaliação técnica. O aplicativo não envia ajustes ao gerador.',
+              style: TextStyle(color: XColors.gray, fontSize: 11, fontStyle: FontStyle.italic)),
+        ]),
+      ),
+    );
+  }
+}

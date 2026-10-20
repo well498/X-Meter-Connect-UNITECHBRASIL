@@ -2,23 +2,79 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+
 /// Erro de comunicação com o instrumento (rede, HTTP ou protocolo).
 class MeterException implements Exception {
   final String message;
-  const MeterException(this.message);
+
+  /// Código HTTP quando a falha veio de uma resposta do instrumento.
+  final int? httpStatus;
+  const MeterException(this.message, {this.httpStatus});
   @override
   String toString() => message;
 }
 
-/// Identificação devolvida por GET /v1/device.
+/// Identificação e estado devolvidos por GET /v1/device.
 class DeviceInfo {
   final String deviceId;
   final int protocolVersion;
   final String? firmware;
+  final String? model;
 
   /// true quando o equipamento do outro lado é o simulador de bancada.
   final bool simulated;
-  const DeviceInfo(this.deviceId, this.protocolVersion, this.firmware, {this.simulated = false});
+
+  /// Bateria (0–100 %) e carregamento por USB-C, quando informados.
+  final double? batteryPct;
+  final bool? charging;
+
+  /// 'local' (configurado no display do instrumento) ou 'connected'.
+  final String? mode;
+
+  /// Transporte em uso: 'wifi' ou 'ble'.
+  final String? transport;
+  final String? calibration;
+  final String? probeId;
+
+  /// Erros e alertas do instrumento.
+  final List<String> alerts;
+
+  const DeviceInfo(this.deviceId, this.protocolVersion, this.firmware,
+      {this.simulated = false,
+      this.model,
+      this.batteryPct,
+      this.charging,
+      this.mode,
+      this.transport,
+      this.calibration,
+      this.probeId,
+      this.alerts = const []});
+
+  Map<String, Object?> toDbMap() => {
+        'device_id': deviceId,
+        'firmware': firmware,
+        'model': model,
+        'protocol': protocolVersion,
+        'battery_pct': batteryPct,
+        'charging': charging == null ? null : (charging! ? 1 : 0),
+        'mode': mode,
+        'transport': transport,
+        'calibration': calibration,
+        'alerts': alerts.isEmpty ? null : jsonEncode(alerts),
+        'simulated': simulated ? 1 : 0,
+      };
+}
+
+/// SET atualmente configurado no instrumento (GET /v1/session/set).
+class DeviceSet {
+  final String? sessionId;
+  final double ma;
+  final double ms;
+
+  /// 'app' (enviado pelo aplicativo) ou 'instrumento' (display/botões).
+  final String origin;
+  final DateTime? changedAt;
+  const DeviceSet(this.sessionId, this.ma, this.ms, this.origin, this.changedAt);
 }
 
 /// Página de leituras devolvida por GET /v1/readings.
@@ -60,7 +116,7 @@ class MeterApi {
         throw const MeterException('Token de pareamento recusado pelo instrumento');
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw MeterException('Instrumento respondeu HTTP ${response.statusCode}');
+        throw MeterException('Instrumento respondeu HTTP ${response.statusCode}', httpStatus: response.statusCode);
       }
       final json = _decode(body);
       if (json is! Map) throw const MeterException('Resposta do instrumento em formato inesperado');
@@ -94,7 +150,22 @@ class MeterApi {
     if (v != protocolVersion) {
       throw MeterException('Protocolo incompatível (instrumento v$v, aplicativo v$protocolVersion)');
     }
-    return DeviceInfo(id, v as int, j['firmware']?.toString(), simulated: j['simulated'] == true);
+    final battery = j['battery'];
+    final cal = j['calibration'];
+    return DeviceInfo(
+      id,
+      v as int,
+      j['firmware']?.toString(),
+      simulated: j['simulated'] == true,
+      model: j['model']?.toString(),
+      batteryPct: battery is Map && battery['percent'] is num ? (battery['percent'] as num).toDouble() : null,
+      charging: battery is Map && battery['charging'] is bool ? battery['charging'] as bool : null,
+      mode: j['mode']?.toString(),
+      transport: j['transport']?.toString(),
+      calibration: cal is Map ? [cal['status'], if (cal['due'] != null) 'até ${cal['due']}'].join(' ') : cal?.toString(),
+      probeId: j['probe_id']?.toString(),
+      alerts: j['alerts'] is List ? (j['alerts'] as List).map((e) => e.toString()).toList() : const [],
+    );
   }
 
   /// Envia apenas os parâmetros SET de referência para o medidor.
@@ -108,6 +179,21 @@ class MeterApi {
     });
     if (j['accepted'] != true || j['session_id'] != sessionId) {
       throw const MeterException('SET não confirmado pelo instrumento');
+    }
+  }
+
+  /// SET atual do instrumento (protocolo v1.2). Devolve null se o firmware
+  /// ainda não oferece o recurso (HTTP 404).
+  Future<DeviceSet?> deviceSet() async {
+    try {
+      final j = await _request('GET', _uri('/v1/session/set'));
+      final ma = j['set_ma'], ms = j['set_ms'];
+      if (ma is! num || ms is! num) return null;
+      return DeviceSet(j['session_id']?.toString(), ma.toDouble(), ms.toDouble(),
+          j['origin']?.toString() ?? 'app', DateTime.tryParse(j['changed_at']?.toString() ?? ''));
+    } on MeterException catch (e) {
+      if (e.httpStatus == 404 || e.httpStatus == 405) return null;
+      rethrow;
     }
   }
 

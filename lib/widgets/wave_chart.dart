@@ -5,6 +5,15 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 import '../theme.dart';
 
+/// Marca no gráfico: linha vertical (instante) ou ponto (instante + mA).
+class ChartMarker {
+  final double tMs;
+  final double? ma;
+  final String label;
+  final Color color;
+  const ChartMarker(this.tMs, this.label, this.color, {this.ma});
+}
+
 class WaveSeries {
   final Waveform wave;
   final Color color;
@@ -19,7 +28,17 @@ class WaveChart extends StatefulWidget {
   final List<WaveSeries> series;
   final double? referenceMa;
   final bool interactive;
-  const WaveChart({super.key, required this.series, this.referenceMa, this.interactive = true});
+
+  /// Início, fim, pico e patamar da exposição.
+  final List<ChartMarker> markers;
+  final double? plateauMa;
+  const WaveChart(
+      {super.key,
+      required this.series,
+      this.referenceMa,
+      this.interactive = true,
+      this.markers = const [],
+      this.plateauMa});
 
   @override
   State<WaveChart> createState() => _WaveChartState();
@@ -88,7 +107,7 @@ class _WaveChartState extends State<WaveChart> {
               }
             : null,
         child: CustomPaint(
-          painter: _ChartPainter(widget.series, widget.referenceMa, _t0, _t0 + _span),
+          painter: _ChartPainter(widget.series, widget.referenceMa, _t0, _t0 + _span, widget.markers, widget.plateauMa),
           child: const SizedBox.expand(),
         ),
       );
@@ -123,7 +142,9 @@ class _ChartPainter extends CustomPainter {
   final double? refMa;
   final double t0;
   final double t1;
-  _ChartPainter(this.series, this.refMa, this.t0, this.t1);
+  final List<ChartMarker> markers;
+  final double? plateauMa;
+  _ChartPainter(this.series, this.refMa, this.t0, this.t1, this.markers, this.plateauMa);
 
   static double niceStep(double range, int ticks) {
     if (range <= 0) return 1;
@@ -228,7 +249,38 @@ class _ChartPainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2);
     }
+    // Patamar (linha contínua) e marcas de início/fim/pico.
+    if (plateauMa != null) {
+      final y = pt(t0, plateauMa!).dy;
+      canvas.drawLine(Offset(plot.left, y), Offset(plot.right, y),
+          Paint()
+            ..color = XColors.okText.withValues(alpha: 0.7)
+            ..strokeWidth = 1);
+    }
+    for (final m in markers) {
+      if (m.tMs < t0 || m.tMs > t1) continue;
+      final x = pt(m.tMs, 0).dx;
+      final paint = Paint()
+        ..color = m.color
+        ..strokeWidth = 1.4;
+      if (m.ma == null) {
+        for (var y = plot.top; y < plot.bottom; y += 8) {
+          canvas.drawLine(Offset(x, y), Offset(x, min(y + 4, plot.bottom)), paint);
+        }
+      } else {
+        canvas.drawCircle(pt(m.tMs, m.ma!), 4.5, paint..style = PaintingStyle.stroke);
+      }
+    }
     canvas.restore();
+    for (final m in markers) {
+      if (m.tMs < t0 || m.tMs > t1) continue;
+      final p = m.ma == null ? Offset(pt(m.tMs, 0).dx, plot.top + 2) : pt(m.tMs, m.ma!) - const Offset(0, 16);
+      final tp = TextPainter(
+        text: TextSpan(text: m.label, style: TextStyle(fontSize: 10, color: m.color, fontWeight: FontWeight.w700)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(min(p.dx + 3, plot.right - tp.width), p.dy));
+    }
 
     // Legenda (comparação).
     if (series.length > 1) {
@@ -247,5 +299,10 @@ class _ChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ChartPainter old) =>
-      old.series != series || old.refMa != refMa || old.t0 != t0 || old.t1 != t1;
+      old.series != series ||
+      old.refMa != refMa ||
+      old.t0 != t0 ||
+      old.t1 != t1 ||
+      old.markers != markers ||
+      old.plateauMa != plateauMa;
 }
